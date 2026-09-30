@@ -13,12 +13,16 @@ export class InstallCommands {
     private configService: ConfigService
   ) {}
 
-  async installPackage(versionId?: string): Promise<void> {
+  /**
+   * Install a package version. Installs into `targetOrgOverride` when given
+   * (e.g. a scratch org just created), otherwise the configured target org.
+   */
+  async installPackage(versionId?: string, targetOrgOverride?: string): Promise<void> {
     try {
-      const targetOrg = this.configService.getDefaultTargetOrg();
+      const targetOrg = targetOrgOverride || this.configService.getDefaultTargetOrg();
       if (!targetOrg) {
         vscode.window.showErrorMessage(
-          'No target org configured. Please set sfPackageManager.defaultTargetOrg in settings.'
+          'No target org configured. Use "Switch Target Org" to select one.'
         );
         return;
       }
@@ -107,14 +111,14 @@ export class InstallCommands {
         }
       }
 
-      Logger.info(`Installing package: ${preview}`);
+      Logger.debug(`Installing package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
         args,
         waitTime > 0
-          ? `Installing package (waiting up to ${waitTime} minutes)...`
-          : 'Installing package...'
+          ? `Installing package into ${targetOrg} (waiting up to ${waitTime} minutes)...`
+          : `Installing package into ${targetOrg}...`
       );
 
       if (!result.success) {
@@ -153,7 +157,7 @@ export class InstallCommands {
 
       const args = this.commandBuilder.buildPackageInstallReport(requestId, targetOrg);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Checking install status: ${preview}`);
+      Logger.debug(`Checking install status: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -211,7 +215,7 @@ export class InstallCommands {
 
       const args = this.commandBuilder.buildPackageUninstall(packageId, targetOrg, 10);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Uninstalling package: ${preview}`);
+      Logger.debug(`Uninstalling package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -246,7 +250,7 @@ export class InstallCommands {
 
       const args = this.commandBuilder.buildPackageInstalledList(targetOrg);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Listing installed packages: ${preview}`);
+      Logger.debug(`Listing installed packages: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -435,7 +439,7 @@ export class InstallCommands {
         return;
       }
 
-      Logger.info(`Upgrading package: ${preview}`);
+      Logger.debug(`Upgrading package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -556,7 +560,7 @@ export class InstallCommands {
       const args = this.commandBuilder.buildPackageInstall(request);
       const preview = this.commandBuilder.previewCommand('sf', args);
 
-      Logger.info(`Upgrading to latest: ${preview}`);
+      Logger.debug(`Upgrading to latest: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',

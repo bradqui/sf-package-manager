@@ -9,12 +9,11 @@ import { VersionTreeProvider } from './providers/treeView/versionTreeProvider';
 import { InstallationTreeProvider } from './providers/treeView/installationTreeProvider';
 
 export async function activate(context: vscode.ExtensionContext) {
-  Logger.info('SF Package Manager activating...');
-
-  // Create output channel
-  const outputChannel = vscode.window.createOutputChannel('SF Package Manager');
+  // Log channel: level is controlled by "Developer: Set Log Level..."
+  const outputChannel = vscode.window.createOutputChannel('SF Package Manager', { log: true });
   context.subscriptions.push(outputChannel);
   Logger.setOutputChannel(outputChannel);
+  Logger.info('SF Package Manager activating...');
 
   // Initialize services
   const configService = new ConfigService();
@@ -33,9 +32,12 @@ export async function activate(context: vscode.ExtensionContext) {
     Logger.info(`Found Salesforce project: ${projectName}`);
   }
 
-  // Check if SF CLI is available
-  const sfCliAvailable = await cliExecutor.checkSfCliAvailable();
-  if (!sfCliAvailable) {
+  // Check the Salesforce CLI in the background so activation isn't blocked
+  cliExecutor.checkSfCliAvailable().then(available => {
+    if (available) {
+      Logger.info('Salesforce CLI (sf) detected');
+      return;
+    }
     Logger.error('Salesforce CLI (sf) not found in PATH');
     vscode.window.showErrorMessage(
       'SF Package Manager: Salesforce CLI (sf) is not installed or not in PATH. Please install the Salesforce CLI.',
@@ -45,9 +47,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.env.openExternal(vscode.Uri.parse('https://developer.salesforce.com/tools/salesforcecli'));
       }
     });
-  } else {
-    Logger.info('Salesforce CLI (sf) detected');
-  }
+  });
 
   // Register tree view providers
   const packageTreeProvider = new PackageTreeProvider(projectService, configService);
@@ -60,21 +60,46 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider('sfInstallationExplorer', installationTreeProvider)
   );
 
-  Logger.info('Tree view providers registered');
+  const refreshTrees = () => {
+    packageTreeProvider.refresh();
+    versionTreeProvider.refresh();
+    installationTreeProvider.refresh();
+  };
 
   // Register all commands
   registerCommands(context, { configService, projectService });
 
-  // Register tree view refresh commands
   context.subscriptions.push(
     vscode.commands.registerCommand('sfPackageManager.refresh', () => {
-      Logger.info('Refresh command triggered');
-      packageTreeProvider.refresh();
-      versionTreeProvider.refresh();
-      installationTreeProvider.refresh();
-      vscode.window.showInformationMessage('SF Package Manager: Refreshed');
+      Logger.debug('Refresh command triggered');
+      refreshTrees();
     })
   );
+
+  // Refresh the sidebar after commands that change packages, versions, installs or orgs
+  let refreshTimer: NodeJS.Timeout | undefined;
+  context.subscriptions.push(
+    CliExecutor.onDidChangeData(() => {
+      if (!configService.getAutoRefresh()) {
+        return;
+      }
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refreshTrees, 500);
+    }),
+    { dispose: () => clearTimeout(refreshTimer) }
+  );
+
+  // Pick up edits to sfdx-project.json without a window reload
+  const projectWatcher = vscode.workspace.createFileSystemWatcher('**/sfdx-project.json');
+  const onProjectFileChanged = () => {
+    Logger.debug('sfdx-project.json changed; reloading project');
+    projectService.clearCache();
+    refreshTrees();
+  };
+  projectWatcher.onDidChange(onProjectFileChanged);
+  projectWatcher.onDidCreate(onProjectFileChanged);
+  projectWatcher.onDidDelete(onProjectFileChanged);
+  context.subscriptions.push(projectWatcher);
 
   // Register tree view detail commands
   context.subscriptions.push(
@@ -95,16 +120,50 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Show activation message
-  Logger.info('SF Package Manager activated successfully');
+  context.subscriptions.push(createStatusBarItem());
 
-  // Show status bar item
-  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.text = '$(package) SF Packages';
-  statusBarItem.tooltip = 'SF Package Manager';
-  statusBarItem.command = 'sfPackageManager.openSettings';
-  statusBarItem.show();
-  context.subscriptions.push(statusBarItem);
+  Logger.info('SF Package Manager activated');
+}
+
+/**
+ * Status bar item that opens the dashboard, and shows a spinner with the
+ * running operation (and elapsed time) while CLI commands are in flight.
+ */
+function createStatusBarItem(): vscode.Disposable {
+  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  item.command = 'sfPackageManager.openDashboard';
+  let ticker: NodeJS.Timeout | undefined;
+
+  const elapsed = (startedAt: number) => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
+  const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+  const update = () => {
+    const running = CliExecutor.getRunningOperations();
+    if (running.length === 0) {
+      clearInterval(ticker);
+      ticker = undefined;
+      item.text = '$(package) SF Packages';
+      item.tooltip = 'Open the SF Package Manager dashboard';
+      return;
+    }
+
+    const latest = running[running.length - 1];
+    const others = running.length > 1 ? ` (+${running.length - 1})` : '';
+    item.text = `$(sync~spin) ${truncate(latest.label, 45)} ${elapsed(latest.startedAt)}${others}`;
+    item.tooltip = `Running:\n${running.map(op => `• ${op.label} (${elapsed(op.startedAt)})`).join('\n')}\n\nClick to open the dashboard`;
+    if (!ticker) {
+      ticker = setInterval(update, 1000);
+    }
+  };
+
+  const subscription = CliExecutor.onDidChangeRunning(update);
+  update();
+  item.show();
+
+  return vscode.Disposable.from(item, subscription, { dispose: () => clearInterval(ticker) });
 }
 
 export function deactivate() {

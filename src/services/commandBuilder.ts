@@ -1,5 +1,6 @@
 import { PackageVersionCreateRequest, PackageInstallRequest, ScratchOrgCreateRequest } from '../models/packageVersion';
 import { PackageCreateRequest, PackageUpdateRequest } from '../models/package';
+import { formatCommand } from '../utils/secrets';
 
 export class CommandBuilder {
   buildPackageCreate(request: PackageCreateRequest, devHub: string): string[] {
@@ -466,20 +467,8 @@ export class CommandBuilder {
     return args;
   }
 
-  // Preview the command as a string
+  // Preview the command as a string, with installation keys masked
   previewCommand(command: string, args: string[]): string {
-    // Mask sensitive information like installation keys
-    const maskedArgs = args.map((arg, index) => {
-      if (
-        (args[index - 1] === '--installation-key' ||
-          args[index - 1] === '-k') &&
-        index > 0
-      ) {
-        return '********';
-      }
-      return arg;
-    });
-
-    return `${command} ${maskedArgs.join(' ')}`;
+    return formatCommand(command, args);
   }
 }

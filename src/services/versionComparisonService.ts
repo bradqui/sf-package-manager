@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { escapeHtml } from '../utils/html';
 import * as path from 'path';
 import * as fs from 'fs';
 import { CliExecutor } from './cliExecutor';
@@ -244,10 +245,10 @@ export class VersionComparisonService {
 
       return `
         <tr class="${diff.changed ? 'changed' : ''}">
-          <td class="field-name">${this.formatFieldName(diff.field)}</td>
-          <td class="value old-value ${colorClass}">${diff.oldValue}</td>
+          <td class="field-name">${escapeHtml(this.formatFieldName(diff.field))}</td>
+          <td class="value old-value ${colorClass}">${escapeHtml(diff.oldValue)}</td>
           <td class="icon">${icon}</td>
-          <td class="value new-value ${colorClass}">${diff.newValue}</td>
+          <td class="value new-value ${colorClass}">${escapeHtml(diff.newValue)}</td>
         </tr>
       `;
     };
@@ -401,13 +402,13 @@ export class VersionComparisonService {
         <div class="version-info">
           <div class="version-box">
             <div class="version-label">Old Version</div>
-            <div class="version-name">${this.getVersionDisplayName(version1)}</div>
-            <div class="version-id">${version1.SubscriberPackageVersionId || version1.Id}</div>
+            <div class="version-name">${escapeHtml(this.getVersionDisplayName(version1))}</div>
+            <div class="version-id">${escapeHtml(version1.SubscriberPackageVersionId || version1.Id)}</div>
           </div>
           <div class="version-box">
             <div class="version-label">New Version</div>
-            <div class="version-name">${this.getVersionDisplayName(version2)}</div>
-            <div class="version-id">${version2.SubscriberPackageVersionId || version2.Id}</div>
+            <div class="version-name">${escapeHtml(this.getVersionDisplayName(version2))}</div>
+            <div class="version-id">${escapeHtml(version2.SubscriberPackageVersionId || version2.Id)}</div>
           </div>
         </div>
 

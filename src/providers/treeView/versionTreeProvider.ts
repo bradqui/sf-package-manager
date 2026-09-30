@@ -106,9 +106,17 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
 
     const items: PackageTreeItem[] = [];
 
-    // Get package directories and their versions
+    // Get package directories and their versions (loaded in parallel)
     if (project.packageDirectories && project.packageDirectories.length > 0) {
-      for (const dir of project.packageDirectories) {
+      const aliases = project.packageAliases || {};
+      const versionsByDir = await vscode.window.withProgress(
+        { location: { viewId: 'sfVersionExplorer' } },
+        () => Promise.all(project.packageDirectories.map(dir =>
+          aliases[dir.package] ? this.loadVersionsForPackage(aliases[dir.package]) : Promise.resolve([])
+        ))
+      );
+
+      project.packageDirectories.forEach((dir, dirIndex) => {
         items.push(
           new PackageTreeItem(
             `${dir.package} Versions`,
@@ -119,12 +127,7 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
           )
         );
 
-        // Try to get package alias
-        const packageAlias = project.packageAliases[dir.package];
-        if (packageAlias) {
-          // Load versions for this package
-          const versions = await this.loadVersionsForPackage(packageAlias);
-          versions.forEach(version => {
+        versionsByDir[dirIndex].forEach(version => {
             items.push(
               new PackageTreeItem(
                 `  ${version.Name} (${version.MajorVersion}.${version.MinorVersion}.${version.PatchVersion}.${version.BuildNumber})`,
@@ -138,9 +141,8 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
                 version
               )
             );
-          });
-        }
-      }
+        });
+      });
     }
 
     if (items.length === 0) {
@@ -179,7 +181,10 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
       }
 
       const args = this.commandBuilder.buildPackageVersionList(devHub);
-      const result = await this.cliExecutor.execute('sf', args);
+      const result = await vscode.window.withProgress(
+        { location: { viewId: 'sfVersionExplorer' } },
+        () => this.cliExecutor.execute('sf', args, { label: 'Loading package versions' })
+      );
 
       if (!result.success || !result.data?.result) {
         Logger.error(`Failed to load versions: ${result.error}`);

@@ -6,7 +6,10 @@ import { CommandBuilder } from '../services/commandBuilder';
 import { ConfigService } from '../services/configService';
 import { Logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/errors';
-import { ScratchOrgCreateRequest, ScratchOrgInfo } from '../models/packageVersion';
+import { ScratchOrgCreateRequest } from '../models/packageVersion';
+import { OrgService, OrgSummary } from '../services/orgService';
+
+const SCRATCH_DEF_GLOB = '**/*scratch-def*.json';
 
 export interface ScratchDefConfig {
   orgName?: string;
@@ -16,11 +19,15 @@ export interface ScratchDefConfig {
 }
 
 export class ScratchOrgCommands {
+  private orgService: OrgService;
+
   constructor(
     private cliExecutor: CliExecutor,
     private commandBuilder: CommandBuilder,
     private configService: ConfigService
-  ) {}
+  ) {
+    this.orgService = new OrgService(cliExecutor);
+  }
 
   /**
    * Create scratch org with wizard
@@ -50,16 +57,16 @@ export class ScratchOrgCommands {
       }
 
       const definitionFiles = await vscode.workspace.findFiles(
-        '**/project-scratch-def.json',
+        SCRATCH_DEF_GLOB,
         '**/node_modules/**',
-        10
+        20
       );
 
       let definitionFile: string;
 
       if (definitionFiles.length === 0) {
         vscode.window.showErrorMessage(
-          'No project-scratch-def.json files found in workspace. Please create one first.'
+          'No scratch org definition files (*scratch-def*.json) found in workspace. Use "Generate Scratch Org Definition" to create one.'
         );
         return;
       } else if (definitionFiles.length === 1) {
@@ -159,7 +166,7 @@ export class ScratchOrgCommands {
       // Preview command
       const args = this.commandBuilder.buildScratchOrgCreate(request);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Command preview: ${preview}`);
+      Logger.debug(`Command preview: ${preview}`);
 
       const confirm = await vscode.window.showInformationMessage(
         `Create scratch org "${alias}"?`,
@@ -181,13 +188,10 @@ export class ScratchOrgCommands {
       if (result.success && result.data?.result) {
         const orgInfo = result.data.result;
         vscode.window.showInformationMessage(
-          `Scratch org "${alias}" created successfully!\nUsername: ${orgInfo.username}`
+          `Scratch org "${alias}" created successfully! Username: ${orgInfo.username}`
         );
-
-        // Refresh tree views
-        await vscode.commands.executeCommand('sfPackageManager.refreshAll');
       } else {
-        throw new Error(result.error || 'Failed to create scratch org');
+        ErrorHandler.handle(result.error, 'Failed to create scratch org');
       }
     } catch (error) {
       ErrorHandler.handle(error, 'Failed to create scratch org');
@@ -198,43 +202,14 @@ export class ScratchOrgCommands {
    * List all orgs
    */
   async listOrgs(): Promise<void> {
-    try {
-      Logger.info('Listing all orgs');
+    const selected = await this.orgService.pickOrg({
+      title: 'Authenticated Orgs',
+      placeHolder: 'Select an org to view details',
+      emptyMessage: 'No orgs found. Authenticate one with "sf org login web".'
+    });
 
-      const args = this.commandBuilder.buildOrgList();
-      const result = await this.cliExecutor.execute('sf', args);
-
-      if (result.success && result.data?.result) {
-        const orgs = [
-          ...(result.data.result.scratchOrgs || []),
-          ...(result.data.result.nonScratchOrgs || [])
-        ];
-
-        if (orgs.length === 0) {
-          vscode.window.showInformationMessage('No orgs found');
-          return;
-        }
-
-        // Display in quick pick
-        const items = orgs.map((org: any) => ({
-          label: org.alias || org.username,
-          description: org.username,
-          detail: `${org.isDefaultDevHubUsername ? '[Dev Hub] ' : ''}${org.instanceUrl || ''}${
-            org.expirationDate ? ` | Expires: ${new Date(org.expirationDate).toLocaleDateString()}` : ''
-          }`,
-          org: org
-        }));
-
-        const selected = await vscode.window.showQuickPick(items, {
-          placeHolder: 'Select an org to view details'
-        });
-
-        if (selected) {
-          await this.showOrgDetails(selected.org.username);
-        }
-      }
-    } catch (error) {
-      ErrorHandler.handle(error, 'Failed to list orgs');
+    if (selected) {
+      await this.showOrgDetails(selected.username);
     }
   }
 
@@ -244,11 +219,15 @@ export class ScratchOrgCommands {
   async showOrgDetails(targetOrg: string): Promise<void> {
     try {
       const args = this.commandBuilder.buildOrgDisplay(targetOrg);
-      const result = await this.cliExecutor.execute('sf', args);
+      const result = await this.cliExecutor.executeWithProgress('sf', args, 'Loading org details...');
 
-      if (result.success && result.data?.result) {
-        const org = result.data.result;
+      if (!result.success) {
+        ErrorHandler.handle(result.error, 'Failed to show org details');
+        return;
+      }
 
+      const org = result.data?.result;
+      if (org) {
         const message = `
 **Org Details**
 
@@ -273,47 +252,23 @@ Status: ${org.status || 'Active'}
    */
   async deleteScratchOrg(): Promise<void> {
     try {
-      Logger.info('Starting scratch org deletion');
+      Logger.debug('Starting scratch org deletion');
 
-      // List scratch orgs
-      const args = this.commandBuilder.buildOrgList();
-      const result = await this.cliExecutor.execute('sf', args);
-
-      if (!result.success || !result.data?.result) {
-        throw new Error('Failed to list orgs');
-      }
-
-      const scratchOrgs = result.data.result.scratchOrgs || [];
-
-      if (scratchOrgs.length === 0) {
-        vscode.window.showInformationMessage('No scratch orgs found');
-        return;
-      }
-
-      // Select scratch org to delete
-      interface ScratchOrgItem extends vscode.QuickPickItem {
-        username: string;
-      }
-
-      const items: ScratchOrgItem[] = scratchOrgs.map((org: any) => ({
-        label: org.alias || org.username,
-        description: org.username,
-        detail: `Expires: ${org.expirationDate ? new Date(org.expirationDate).toLocaleDateString() : 'N/A'}`,
-        username: org.username
-      }));
-
-      const selected = await vscode.window.showQuickPick<ScratchOrgItem>(items, {
-        placeHolder: 'Select scratch org to delete'
+      const selected = await this.orgService.pickOrg({
+        title: 'Delete Scratch Org',
+        placeHolder: 'Select scratch org to delete',
+        emptyMessage: 'No scratch orgs found.',
+        filter: org => org.isScratch
       });
 
       if (!selected) {
         return;
       }
 
-      // Confirm deletion
+      const name = selected.alias || selected.username;
       const confirm = await vscode.window.showWarningMessage(
-        `Delete scratch org "${selected.label}"?`,
-        { modal: true },
+        `Delete scratch org "${name}"?`,
+        { modal: true, detail: 'The org and all its data are permanently deleted.' },
         'Delete'
       );
 
@@ -321,23 +276,17 @@ Status: ${org.status || 'Active'}
         return;
       }
 
-      // Execute deletion
       const deleteArgs = this.commandBuilder.buildOrgDelete(selected.username);
       const deleteResult = await this.cliExecutor.executeWithProgress(
         'sf',
         deleteArgs,
-        `Deleting scratch org "${selected.label}"...`
+        `Deleting scratch org "${name}"...`
       );
 
       if (deleteResult.success) {
-        vscode.window.showInformationMessage(
-          `Scratch org "${selected.label}" deleted successfully`
-        );
-
-        // Refresh tree views
-        await vscode.commands.executeCommand('sfPackageManager.refreshAll');
+        vscode.window.showInformationMessage(`Scratch org "${name}" deleted successfully`);
       } else {
-        throw new Error(deleteResult.error || 'Failed to delete scratch org');
+        ErrorHandler.handle(deleteResult.error, 'Failed to delete scratch org');
       }
     } catch (error) {
       ErrorHandler.handle(error, 'Failed to delete scratch org');
@@ -349,32 +298,38 @@ Status: ${org.status || 'Active'}
    */
   async createAndInstallPackage(versionId?: string): Promise<void> {
     try {
-      Logger.info('Starting create scratch org and install package workflow');
+      Logger.debug('Starting create scratch org and install package workflow');
 
-      // Step 1: Create scratch org (simplified)
       const devHub = this.configService.getDefaultDevHub();
       if (!devHub) {
-        vscode.window.showErrorMessage('No Dev Hub configured');
+        vscode.window.showErrorMessage('No Dev Hub configured. Use "Switch Dev Hub" to select one.');
         return;
       }
 
-      // Find definition file
-      const definitionFiles = await vscode.workspace.findFiles(
-        '**/project-scratch-def.json',
-        '**/node_modules/**',
-        10
-      );
+      const definitionFiles = await vscode.workspace.findFiles(SCRATCH_DEF_GLOB, '**/node_modules/**', 20);
 
       if (definitionFiles.length === 0) {
-        vscode.window.showErrorMessage('No project-scratch-def.json found');
+        vscode.window.showErrorMessage(
+          'No scratch org definition files (*scratch-def*.json) found. Use "Generate Scratch Org Definition" to create one.'
+        );
         return;
       }
 
-      const definitionFile = vscode.workspace.asRelativePath(definitionFiles[0]);
+      let definitionFile = vscode.workspace.asRelativePath(definitionFiles[0]);
+      if (definitionFiles.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          definitionFiles.map(uri => vscode.workspace.asRelativePath(uri)),
+          { title: 'Create Scratch Org & Install Package', placeHolder: 'Select scratch org definition file' }
+        );
+        if (!picked) {
+          return;
+        }
+        definitionFile = picked;
+      }
 
-      // Ask for alias
       const alias = await vscode.window.showInputBox({
-        prompt: 'Enter alias for new scratch org',
+        title: 'Create Scratch Org & Install Package',
+        prompt: 'Alias for the new scratch org',
         placeHolder: 'test-install-org',
         value: `test-${Date.now()}`
       });
@@ -383,7 +338,6 @@ Status: ${org.status || 'Active'}
         return;
       }
 
-      // Create scratch org
       const request: ScratchOrgCreateRequest = {
         definitionFile,
         devHub,
@@ -401,101 +355,41 @@ Status: ${org.status || 'Active'}
       );
 
       if (!createResult.success) {
-        throw new Error('Failed to create scratch org');
+        ErrorHandler.handle(createResult.error, 'Failed to create scratch org');
+        return;
       }
 
-      vscode.window.showInformationMessage(
-        `Scratch org "${alias}" created! Now installing package...`
-      );
+      vscode.window.showInformationMessage(`Scratch org "${alias}" created. Now installing package...`);
 
-      // Step 2: Install package
-      if (versionId) {
-        // Use the provided version ID
-        await vscode.commands.executeCommand(
-          'sfPackageManager.installPackage',
-          versionId,
-          alias
-        );
-      } else {
-        // Open install form
-        await vscode.commands.executeCommand('sfPackageManager.installPackageForm');
-      }
+      // Install into the new scratch org, not the configured target org
+      await vscode.commands.executeCommand('sfPackageManager.installPackage', versionId, alias);
     } catch (error) {
       ErrorHandler.handle(error, 'Failed to create scratch org and install package');
     }
   }
 
   /**
-   * Open a scratch org in the browser
+   * Open an org in the browser
    */
   async openScratchOrg(targetOrg?: string): Promise<void> {
     try {
-      Logger.info('Opening scratch org in browser');
-
       let orgToOpen = targetOrg;
 
       if (!orgToOpen) {
-        // Check for default target org first
-        const defaultTargetOrg = this.configService.getDefaultTargetOrg();
+        const selected = await this.orgService.pickOrg({
+          title: 'Open Org in Browser',
+          placeHolder: 'Select org to open',
+          emptyMessage: 'No orgs found. Authenticate one with "sf org login web".',
+          current: this.configService.getDefaultTargetOrg()
+        });
 
-        if (defaultTargetOrg) {
-          const choice = await vscode.window.showQuickPick(
-            [
-              { label: `Open ${defaultTargetOrg}`, value: defaultTargetOrg, description: '(Default Target Org)' },
-              { label: 'Choose different org...', value: '__choose__', description: '' }
-            ],
-            { placeHolder: 'Select org to open' }
-          );
-
-          if (!choice) {
-            return;
-          }
-
-          if (choice.value !== '__choose__') {
-            orgToOpen = choice.value;
-          }
+        if (!selected) {
+          return;
         }
 
-        // If still no org selected, show list
-        if (!orgToOpen) {
-          const args = this.commandBuilder.buildOrgList();
-          const result = await this.cliExecutor.execute('sf', args);
-
-          if (!result.success || !result.data?.result) {
-            throw new Error('Failed to list orgs');
-          }
-
-          const scratchOrgs = result.data.result.scratchOrgs || [];
-
-          if (scratchOrgs.length === 0) {
-            vscode.window.showInformationMessage('No scratch orgs found');
-            return;
-          }
-
-          interface OrgItem extends vscode.QuickPickItem {
-            username: string;
-          }
-
-          const items: OrgItem[] = scratchOrgs.map((org: any) => ({
-            label: org.alias || org.username,
-            description: org.username,
-            detail: `Expires: ${org.expirationDate ? new Date(org.expirationDate).toLocaleDateString() : 'N/A'}`,
-            username: org.username
-          }));
-
-          const selected = await vscode.window.showQuickPick<OrgItem>(items, {
-            placeHolder: 'Select scratch org to open'
-          });
-
-          if (!selected) {
-            return;
-          }
-
-          orgToOpen = selected.username;
-        }
+        orgToOpen = selected.username;
       }
 
-      // Open the org
       const openArgs = this.commandBuilder.buildOrgOpen(orgToOpen);
       const openResult = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -503,13 +397,11 @@ Status: ${org.status || 'Active'}
         `Opening ${orgToOpen} in browser...`
       );
 
-      if (openResult.success) {
-        vscode.window.showInformationMessage(`Opened ${orgToOpen} in browser`);
-      } else {
-        throw new Error(openResult.error || 'Failed to open org');
+      if (!openResult.success) {
+        ErrorHandler.handle(openResult.error, 'Failed to open org');
       }
     } catch (error) {
-      ErrorHandler.handle(error, 'Failed to open scratch org');
+      ErrorHandler.handle(error, 'Failed to open org');
     }
   }
 
@@ -657,42 +549,14 @@ Status: ${org.status || 'Active'}
    */
   async setDefaultOrg(username?: string): Promise<void> {
     try {
-      Logger.info('Setting default target org');
-
       let orgToSet = username;
 
       if (!orgToSet) {
-        // List orgs for selection
-        const args = this.commandBuilder.buildOrgList();
-        const result = await this.cliExecutor.execute('sf', args);
-
-        if (!result.success || !result.data?.result) {
-          throw new Error('Failed to list orgs');
-        }
-
-        const allOrgs = [
-          ...(result.data.result.scratchOrgs || []),
-          ...(result.data.result.nonScratchOrgs || [])
-        ];
-
-        if (allOrgs.length === 0) {
-          vscode.window.showInformationMessage('No orgs found');
-          return;
-        }
-
-        interface OrgItem extends vscode.QuickPickItem {
-          username: string;
-        }
-
-        const items: OrgItem[] = allOrgs.map((org: any) => ({
-          label: org.alias || org.username,
-          description: org.username,
-          detail: org.isDefaultUsername ? '(Current Default)' : '',
-          username: org.username
-        }));
-
-        const selected = await vscode.window.showQuickPick<OrgItem>(items, {
-          placeHolder: 'Select org to set as default'
+        const selected = await this.orgService.pickOrg({
+          title: 'Set Default Target Org',
+          placeHolder: 'Select org to use for installs and testing',
+          emptyMessage: 'No orgs found. Authenticate one with "sf org login web".',
+          current: this.configService.getDefaultTargetOrg()
         });
 
         if (!selected) {
@@ -702,14 +566,12 @@ Status: ${org.status || 'Active'}
         orgToSet = selected.username;
       }
 
-      // Update the config
       await this.configService.setDefaultTargetOrg(orgToSet);
 
       Logger.info(`Set default target org to: ${orgToSet}`);
       vscode.window.showInformationMessage(`Default target org set to: ${orgToSet}`);
 
-      // Refresh tree views
-      await vscode.commands.executeCommand('sfPackageManager.refreshAll');
+      await vscode.commands.executeCommand('sfPackageManager.refresh');
     } catch (error) {
       ErrorHandler.handle(error, 'Failed to set default org');
     }
@@ -718,15 +580,9 @@ Status: ${org.status || 'Active'}
   /**
    * Get list of scratch orgs for dashboard
    */
-  async getScratchOrgs(): Promise<any[]> {
+  async getScratchOrgs(force = false): Promise<OrgSummary[]> {
     try {
-      const args = this.commandBuilder.buildOrgList();
-      const result = await this.cliExecutor.execute('sf', args);
-
-      if (result.success && result.data?.result) {
-        return result.data.result.scratchOrgs || [];
-      }
-      return [];
+      return await this.orgService.listScratchOrgs(force);
     } catch (error) {
       Logger.error(`Failed to get scratch orgs: ${error}`);
       return [];
@@ -737,11 +593,7 @@ Status: ${org.status || 'Active'}
    * Get list of definition files in workspace
    */
   async getDefinitionFiles(): Promise<string[]> {
-    const files = await vscode.workspace.findFiles(
-      '**/*scratch-def*.json',
-      '**/node_modules/**',
-      20
-    );
+    const files = await vscode.workspace.findFiles(SCRATCH_DEF_GLOB, '**/node_modules/**', 20);
     return files.map(uri => vscode.workspace.asRelativePath(uri));
   }
 }

@@ -1,55 +1,40 @@
 import * as vscode from 'vscode';
 
+/**
+ * Thin wrapper around a VS Code LogOutputChannel.
+ *
+ * The channel adds timestamps and level tags itself, and users control what is
+ * shown via "Developer: Set Log Level..." (default: info). Anything logged
+ * before the channel is attached is dropped.
+ */
 export class Logger {
-  private static outputChannel: vscode.OutputChannel | null = null;
+  private static outputChannel: vscode.LogOutputChannel | null = null;
 
-  static setOutputChannel(channel: vscode.OutputChannel): void {
+  static setOutputChannel(channel: vscode.LogOutputChannel): void {
     this.outputChannel = channel;
   }
 
-  static info(message: string): void {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [INFO] ${message}`;
-
-    if (this.outputChannel) {
-      this.outputChannel.appendLine(logMessage);
-    }
-    console.log(logMessage);
-  }
-
-  static warn(message: string): void {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [WARN] ${message}`;
-
-    if (this.outputChannel) {
-      this.outputChannel.appendLine(logMessage);
-    }
-    console.warn(logMessage);
-  }
-
-  static error(message: string): void {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [ERROR] ${message}`;
-
-    if (this.outputChannel) {
-      this.outputChannel.appendLine(logMessage);
-    }
-    console.error(logMessage);
+  static trace(message: string): void {
+    this.outputChannel?.trace(message);
   }
 
   static debug(message: string): void {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [DEBUG] ${message}`;
+    this.outputChannel?.debug(message);
+  }
 
-    if (this.outputChannel) {
-      this.outputChannel.appendLine(logMessage);
-    }
-    console.debug(logMessage);
+  static info(message: string): void {
+    this.outputChannel?.info(message);
+  }
+
+  static warn(message: string): void {
+    this.outputChannel?.warn(message);
+  }
+
+  static error(message: string): void {
+    this.outputChannel?.error(message);
   }
 
   static show(): void {
-    if (this.outputChannel) {
-      this.outputChannel.show();
-    }
+    this.outputChannel?.show(true);
   }
 }

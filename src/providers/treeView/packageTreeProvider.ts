@@ -5,6 +5,7 @@ import { ConfigService } from '../../services/configService';
 import { CliExecutor } from '../../services/cliExecutor';
 import { CommandBuilder } from '../../services/commandBuilder';
 import { PackageTreeItem, TreeItemType } from './packageTreeItems';
+import { escapeHtml, scriptJson } from '../../utils/html';
 import { Logger } from '../../utils/logger';
 
 export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeItem> {
@@ -186,7 +187,10 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
       }
 
       const args = this.commandBuilder.buildPackageList(devHub);
-      const result = await this.cliExecutor.execute('sf', args);
+      const result = await vscode.window.withProgress(
+        { location: { viewId: 'sfPackageExplorer' } },
+        () => this.cliExecutor.execute('sf', args, { label: 'Loading packages' })
+      );
 
       if (!result.success || !result.data?.result) {
         Logger.error(`Failed to load packages: ${result.error}`);
@@ -253,11 +257,11 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
     );
 
     const info = [
-      `**Name:** ${pkg.Name}`,
-      `**ID:** ${pkg.Id}`,
-      `**Type:** ${pkg.ContainerOptions}`,
-      pkg.NamespacePrefix ? `**Namespace:** ${pkg.NamespacePrefix}` : '',
-      pkg.Description ? `**Description:** ${pkg.Description}` : '',
+      `**Name:** ${escapeHtml(pkg.Name)}`,
+      `**ID:** ${escapeHtml(pkg.Id)}`,
+      `**Type:** ${escapeHtml(pkg.ContainerOptions)}`,
+      pkg.NamespacePrefix ? `**Namespace:** ${escapeHtml(pkg.NamespacePrefix)}` : '',
+      pkg.Description ? `**Description:** ${escapeHtml(pkg.Description)}` : '',
       pkg.IsOrgDependent ? `**Org Dependent:** Yes` : '',
       `**Created:** ${new Date(pkg.CreatedDate).toLocaleString()}`,
       `**Modified:** ${new Date(pkg.ModifiedDate).toLocaleString()}`
@@ -303,13 +307,13 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         <script>
           const vscode = acquireVsCodeApi();
           function createVersion() {
-            vscode.postMessage({ command: 'createVersion', packageId: '${pkg.Id}' });
+            vscode.postMessage({ command: 'createVersion', packageId: ${scriptJson(pkg.Id)} });
           }
           function updatePackage() {
-            vscode.postMessage({ command: 'updatePackage', package: ${JSON.stringify(pkg)} });
+            vscode.postMessage({ command: 'updatePackage', package: ${scriptJson(pkg)} });
           }
           function deletePackage() {
-            vscode.postMessage({ command: 'deletePackage', package: ${JSON.stringify(pkg)} });
+            vscode.postMessage({ command: 'deletePackage', package: ${scriptJson(pkg)} });
           }
         </script>
       </body>

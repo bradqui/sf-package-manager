@@ -13,8 +13,7 @@ export class ConfigService {
       autoRefresh: config.get<boolean>('autoRefresh') ?? true,
       showCommandPreview: config.get<boolean>('showCommandPreview') ?? true,
       defaultWaitTime: config.get<number>('defaultWaitTime') ?? 10,
-      verboseOutput: config.get<boolean>('verboseOutput') ?? false,
-      saveCommandHistory: config.get<boolean>('saveCommandHistory') ?? true
+      verboseOutput: config.get<boolean>('verboseOutput') ?? false
     };
   }
 
@@ -40,10 +39,6 @@ export class ConfigService {
 
   getVerboseOutput(): boolean {
     return vscode.workspace.getConfiguration(this.configSection).get<boolean>('verboseOutput') ?? false;
-  }
-
-  getSaveCommandHistory(): boolean {
-    return vscode.workspace.getConfiguration(this.configSection).get<boolean>('saveCommandHistory') ?? true;
   }
 
   async setDefaultDevHub(devHub: string): Promise<void> {

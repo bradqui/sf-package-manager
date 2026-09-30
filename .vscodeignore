@@ -8,3 +8,10 @@ tsconfig.json
 **/*.map
 **/*.ts
 !dist/**/*.js
+.claude/**
+.sfdx/**
+scripts/**
+out/**
+*.vsix
+*.md
+!README.md

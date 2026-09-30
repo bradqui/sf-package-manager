@@ -4,6 +4,13 @@
   "description": "Comprehensive management of Salesforce Second Generation Packages (2GP) with visual UI for all package commands",
   "version": "0.1.10",
   "publisher": "brad-quillen",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bradqui/sf-package-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bradqui/sf-package-manager/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -145,44 +152,14 @@
         "category": "SF Package"
       },
       {
-        "command": "sfPackageManager.schedulePushUpgrade",
-        "title": "Schedule Push Upgrade",
-        "category": "SF Package"
-      },
-      {
-        "command": "sfPackageManager.listPushUpgrades",
-        "title": "List Push Upgrades",
-        "category": "SF Package"
-      },
-      {
-        "command": "sfPackageManager.pushUpgradeReport",
-        "title": "Check Push Upgrade Status",
-        "category": "SF Package"
-      },
-      {
-        "command": "sfPackageManager.abortPushUpgrade",
-        "title": "Abort Push Upgrade",
-        "category": "SF Package"
-      },
-      {
         "command": "sfPackageManager.openSettings",
         "title": "Open Settings",
         "icon": "$(settings-gear)",
         "category": "SF Package"
       },
       {
-        "command": "sfPackageManager.viewCommandHistory",
-        "title": "View Command History",
-        "category": "SF Package"
-      },
-      {
         "command": "sfPackageManager.showPackageDetails",
         "title": "Show Package Details",
-        "category": "SF Package"
-      },
-      {
-        "command": "sfPackageManager.executeVersionCreate",
-        "title": "Execute Version Create",
         "category": "SF Package"
       },
       {
@@ -330,10 +307,6 @@
         {
           "command": "sfPackageManager.showPackageDetails",
           "when": "false"
-        },
-        {
-          "command": "sfPackageManager.executeVersionCreate",
-          "when": "false"
         }
       ]
     },
@@ -353,7 +326,7 @@
         "sfPackageManager.autoRefresh": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically refresh tree views after command execution"
+          "description": "Automatically refresh the dashboard and sidebar after commands that change packages, versions, installations or orgs"
         },
         "sfPackageManager.showCommandPreview": {
           "type": "boolean",
@@ -363,17 +336,12 @@
         "sfPackageManager.defaultWaitTime": {
           "type": "number",
           "default": 10,
-          "description": "Default wait time in minutes for package version creation"
+          "description": "Default wait time in minutes for package version creation and installs"
         },
         "sfPackageManager.verboseOutput": {
           "type": "boolean",
           "default": false,
-          "description": "Show verbose command output"
-        },
-        "sfPackageManager.saveCommandHistory": {
-          "type": "boolean",
-          "default": true,
-          "description": "Save command history for later reference"
+          "description": "Log full CLI responses to the Output panel. (Use \"Developer: Set Log Level...\" > SF Package Manager for finer control.)"
         }
       }
     }
@@ -383,12 +351,13 @@
     "compile": "webpack",
     "watch": "webpack --watch",
     "build": "webpack --mode production --devtool hidden-source-map",
-    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository",
+    "package": "npm run build && vsce package --no-dependencies --skip-license",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "install-local": "node scripts/install-local.js"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

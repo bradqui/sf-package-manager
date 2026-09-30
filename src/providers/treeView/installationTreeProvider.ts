@@ -3,6 +3,7 @@ import { ConfigService } from '../../services/configService';
 import { CliExecutor } from '../../services/cliExecutor';
 import { CommandBuilder } from '../../services/commandBuilder';
 import { PackageTreeItem, TreeItemType } from './packageTreeItems';
+import { escapeHtml, scriptJson } from '../../utils/html';
 import { Logger } from '../../utils/logger';
 
 interface InstalledPackage {
@@ -119,7 +120,10 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
       }
 
       const args = this.commandBuilder.buildPackageInstalledList(targetOrg);
-      const result = await this.cliExecutor.execute('sf', args);
+      const result = await vscode.window.withProgress(
+        { location: { viewId: 'sfInstallationExplorer' } },
+        () => this.cliExecutor.execute('sf', args, { label: 'Loading installed packages' })
+      );
 
       if (!result.success || !result.data?.result) {
         Logger.error(`Failed to load installed packages: ${result.error}`);
@@ -192,12 +196,12 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
     );
 
     const info = [
-      `**Name:** ${pkg.SubscriberPackageName}`,
-      `**Namespace:** ${pkg.SubscriberPackageNamespace}`,
-      `**Version:** ${pkg.SubscriberPackageVersionNumber}`,
-      `**Version Name:** ${pkg.SubscriberPackageVersionName}`,
-      `**Package ID:** ${pkg.SubscriberPackageId}`,
-      `**Version ID:** ${pkg.SubscriberPackageVersionId}`
+      `**Name:** ${escapeHtml(pkg.SubscriberPackageName)}`,
+      `**Namespace:** ${escapeHtml(pkg.SubscriberPackageNamespace)}`,
+      `**Version:** ${escapeHtml(pkg.SubscriberPackageVersionNumber)}`,
+      `**Version Name:** ${escapeHtml(pkg.SubscriberPackageVersionName)}`,
+      `**Package ID:** ${escapeHtml(pkg.SubscriberPackageId)}`,
+      `**Version ID:** ${escapeHtml(pkg.SubscriberPackageVersionId)}`
     ].join('\n\n');
 
     panel.webview.html = `
@@ -242,7 +246,7 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
           const vscode = acquireVsCodeApi();
           function uninstall() {
             if (confirm('Are you sure you want to uninstall this package?')) {
-              vscode.postMessage({ command: 'uninstall', packageId: '${pkg.SubscriberPackageVersionId}' });
+              vscode.postMessage({ command: 'uninstall', packageId: ${scriptJson(pkg.SubscriberPackageVersionId)} });
             }
           }
         </script>

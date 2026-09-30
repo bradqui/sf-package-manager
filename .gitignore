@@ -6,3 +6,5 @@ dist/
 .vscode-test-web/
 .sfdx/
 .claude/settings.local.json
+*.md
+!README.md

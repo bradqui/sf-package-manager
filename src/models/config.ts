@@ -5,5 +5,4 @@ export interface ExtensionConfig {
   showCommandPreview: boolean;
   defaultWaitTime: number;
   verboseOutput: boolean;
-  saveCommandHistory: boolean;
 }

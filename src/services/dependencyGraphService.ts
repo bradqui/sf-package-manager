@@ -1,3 +1,5 @@
+import { escapeHtml } from '../utils/html';
+
 export interface DependencyNode {
   id: string;
   name: string;
@@ -135,7 +137,7 @@ export class DependencyGraphService {
             font-size="12"
             font-weight="bold"
           >
-            ${this.truncateText(node.name, 12)}
+            ${escapeHtml(this.truncateText(node.name, 12))}
           </text>
           ${node.namespace ? `
             <text
@@ -145,7 +147,7 @@ export class DependencyGraphService {
               fill="${textColor}"
               font-size="10"
             >
-              ${node.namespace}
+              ${escapeHtml(node.namespace)}
             </text>
           ` : ''}
           ${node.versionNumber ? `
@@ -156,7 +158,7 @@ export class DependencyGraphService {
               fill="#6b7280"
               font-size="10"
             >
-              v${node.versionNumber}
+              v${escapeHtml(node.versionNumber)}
             </text>
           ` : ''}
         </g>

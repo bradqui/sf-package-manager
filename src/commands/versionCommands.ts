@@ -7,6 +7,18 @@ import { DependencyGraphService, DependencyGraph } from '../services/dependencyG
 import { VersionComparisonService } from '../services/versionComparisonService';
 import { Logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/errors';
+import { escapeHtml } from '../utils/html';
+
+interface AncestryNode {
+  data: {
+    SubscriberPackageVersionId: string;
+    MajorVersion: number;
+    MinorVersion: number;
+    PatchVersion: number;
+    BuildNumber: number;
+  };
+  children?: AncestryNode[];
+}
 import {
   PackageVersion,
   PackageVersionCreateRequest,
@@ -39,7 +51,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionList(devHub, packageId);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Listing package versions: ${preview}`);
+      Logger.debug(`Listing package versions: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -186,7 +198,7 @@ export class VersionCommands {
         }
       }
 
-      Logger.info(`Creating package version: ${preview}`);
+      Logger.debug(`Creating package version: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -246,7 +258,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionCreateReport(requestId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Checking version creation status: ${preview}`);
+      Logger.debug(`Checking version creation status: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -317,7 +329,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionPromote(versionId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Promoting package version: ${preview}`);
+      Logger.debug(`Promoting package version: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -387,7 +399,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionDelete(versionId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Deleting package version: ${preview}`);
+      Logger.debug(`Deleting package version: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -437,7 +449,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionReport(versionId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Getting version report: ${preview}`);
+      Logger.debug(`Getting version report: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -454,18 +466,18 @@ export class VersionCommands {
 
       // Format and display the version information
       const info = [
-        `**Version ID:** ${versionData.SubscriberPackageVersionId}`,
-        `**Name:** ${versionData.Name}`,
+        `**Version ID:** ${escapeHtml(versionData.SubscriberPackageVersionId)}`,
+        `**Name:** ${escapeHtml(versionData.Name)}`,
         `**Version:** ${versionData.MajorVersion}.${versionData.MinorVersion}.${versionData.PatchVersion}.${versionData.BuildNumber}`,
         `**Status:** ${versionData.IsReleased ? 'Released' : 'Beta'}`,
-        `**Package ID:** ${versionData.Package2Id}`,
-        versionData.Description ? `**Description:** ${versionData.Description}` : '',
-        versionData.Tag ? `**Tag:** ${versionData.Tag}` : '',
-        versionData.Branch ? `**Branch:** ${versionData.Branch}` : '',
+        `**Package ID:** ${escapeHtml(versionData.Package2Id)}`,
+        versionData.Description ? `**Description:** ${escapeHtml(versionData.Description)}` : '',
+        versionData.Tag ? `**Tag:** ${escapeHtml(versionData.Tag)}` : '',
+        versionData.Branch ? `**Branch:** ${escapeHtml(versionData.Branch)}` : '',
         versionData.HasPassedCodeCoverageCheck !== undefined
-          ? `**Code Coverage:** ${versionData.HasPassedCodeCoverageCheck ? 'Passed' : 'Not Passed'} ${versionData.CodeCoverage ? `(${versionData.CodeCoverage}%)` : ''}`
+          ? `**Code Coverage:** ${versionData.HasPassedCodeCoverageCheck ? 'Passed' : 'Not Passed'} ${versionData.CodeCoverage ? `(${escapeHtml(versionData.CodeCoverage)}%)` : ''}`
           : '',
-        `**Created:** ${versionData.CreatedDate}`
+        `**Created:** ${escapeHtml(versionData.CreatedDate)}`
       ].filter(line => line).join('\n\n');
 
       const panel = vscode.window.createWebviewPanel(
@@ -533,7 +545,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionDisplayAncestry(versionId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Getting version ancestry: ${preview}`);
+      Logger.debug(`Getting version ancestry: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -556,7 +568,7 @@ export class VersionCommands {
         {}
       );
 
-      panel.webview.html = this.createAncestryVisualization(ancestryData);
+      panel.webview.html = this.createAncestryVisualization(ancestryData, versionId);
 
       Logger.info(`Displayed version ancestry for ${versionId}`);
     } catch (error) {
@@ -591,7 +603,7 @@ export class VersionCommands {
 
       const args = this.commandBuilder.buildPackageVersionDisplayDependencies(versionId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Getting version dependencies: ${preview}`);
+      Logger.debug(`Getting version dependencies: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -626,29 +638,31 @@ export class VersionCommands {
     }
   }
 
-  private createAncestryVisualization(ancestryData: any): string {
-    // Parse ancestry data and create tree visualization
-    const versions = ancestryData || [];
-
-    let ancestryTree = '<ul class="ancestry-tree">';
-
-    versions.forEach((item: any, index: number) => {
-      const indent = index * 20;
-      const status = item.IsReleased ? '✓ Released' : '🧪 Beta';
-      const version = `${item.MajorVersion}.${item.MinorVersion}.${item.PatchVersion}.${item.BuildNumber}`;
-
-      ancestryTree += `
-        <li style="margin-left: ${indent}px;">
-          <div class="version-node">
-            <span class="version-number">${version}</span>
-            <span class="version-status">${status}</span>
-            <span class="version-id">${item.SubscriberPackageVersionId}</span>
+  /**
+   * Render the tree returned by `sf package version displayancestry --json`:
+   * a root node `{ data: {...version fields}, children: [...] }`, oldest
+   * released version at the root, descendants below it.
+   */
+  private createAncestryVisualization(ancestryData: AncestryNode | undefined, selectedVersionId: string): string {
+    const renderNode = (node: AncestryNode): string => {
+      const d = node.data || ({} as AncestryNode['data']);
+      const version = `${d.MajorVersion}.${d.MinorVersion}.${d.PatchVersion}.${d.BuildNumber}`;
+      const isSelected = d.SubscriberPackageVersionId === selectedVersionId;
+      const children = (node.children || []).map(renderNode).join('');
+      return `
+        <li>
+          <div class="version-node${isSelected ? ' selected' : ''}">
+            <span class="version-number">${escapeHtml(version)}</span>
+            ${isSelected ? '<span class="version-status">Selected</span>' : ''}
+            <span class="version-id">${escapeHtml(d.SubscriberPackageVersionId)}</span>
           </div>
-        </li>
-      `;
-    });
+          ${children ? `<ul>${children}</ul>` : ''}
+        </li>`;
+    };
 
-    ancestryTree += '</ul>';
+    const body = ancestryData && ancestryData.data
+      ? `<ul class="ancestry-tree">${renderNode(ancestryData)}</ul>`
+      : '<p class="empty">No ancestry information returned for this version.</p>';
 
     return `
       <!DOCTYPE html>
@@ -661,53 +675,47 @@ export class VersionCommands {
             color: var(--vscode-foreground);
           }
           h1 { color: var(--vscode-textLink-foreground); }
-          .ancestry-tree {
+          .ancestry-tree, .ancestry-tree ul {
             list-style: none;
-            padding-left: 0;
+            padding-left: 24px;
+            margin: 0;
           }
-          .ancestry-tree li {
-            margin: 10px 0;
-            position: relative;
+          .ancestry-tree { padding-left: 0; }
+          .ancestry-tree ul {
+            border-left: 1px dashed var(--vscode-panel-border);
+            margin-left: 12px;
           }
-          .ancestry-tree li:before {
-            content: '↓';
-            position: absolute;
-            left: -15px;
-            color: var(--vscode-descriptionForeground);
-          }
-          .ancestry-tree li:first-child:before {
-            content: '●';
-          }
+          .ancestry-tree li { margin: 8px 0; }
           .version-node {
-            display: flex;
+            display: inline-flex;
             gap: 15px;
             align-items: center;
-            padding: 10px;
+            padding: 8px 12px;
             background: var(--vscode-editor-background);
             border: 1px solid var(--vscode-panel-border);
             border-radius: 4px;
           }
-          .version-number {
-            font-weight: bold;
-            font-size: 1.1em;
-          }
+          .version-node.selected { border-color: var(--vscode-focusBorder); }
+          .version-number { font-weight: bold; font-size: 1.1em; }
           .version-status {
             padding: 2px 8px;
             border-radius: 3px;
             font-size: 0.9em;
-            background: var(--vscode-textCodeBlock-background);
+            background: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
           }
           .version-id {
             color: var(--vscode-descriptionForeground);
             font-family: monospace;
             font-size: 0.9em;
           }
+          .empty { color: var(--vscode-descriptionForeground); font-style: italic; }
         </style>
       </head>
       <body>
-        <h1>📊 Version Ancestry Tree</h1>
-        <p>Shows the lineage of package versions from newest (top) to oldest (bottom)</p>
-        ${ancestryTree}
+        <h1>Version Ancestry</h1>
+        <p>Each version is shown beneath the released version it upgrades from. The oldest ancestor is at the top.</p>
+        ${body}
       </body>
       </html>
     `;
@@ -735,18 +743,18 @@ export class VersionCommands {
         dependenciesHtml += `
           <div class="dependency-card">
             <div class="dependency-header">
-              <span class="dependency-name">${dep.subscriberPackageName || 'Unknown Package'}</span>
-              <span class="dependency-namespace">${dep.subscriberPackageNamespace || 'No namespace'}</span>
+              <span class="dependency-name">${escapeHtml(dep.subscriberPackageName || 'Unknown Package')}</span>
+              <span class="dependency-namespace">${escapeHtml(dep.subscriberPackageNamespace || 'No namespace')}</span>
             </div>
             <div class="dependency-details">
               <div class="detail-row">
                 <span class="detail-label">Version ID:</span>
-                <span class="detail-value">${depVersion}</span>
+                <span class="detail-value">${escapeHtml(depVersion)}</span>
               </div>
               ${dep.versionNumber ? `
                 <div class="detail-row">
                   <span class="detail-label">Version:</span>
-                  <span class="detail-value">${dep.versionNumber}</span>
+                  <span class="detail-value">${escapeHtml(dep.versionNumber)}</span>
                 </div>
               ` : ''}
             </div>

@@ -8,6 +8,12 @@ import { ScratchOrgCreateRequest, PackageVersion, PackageInstallRequest, Package
 import { Package, PackageCreateRequest } from '../../models/package';
 import { Logger } from '../../utils/logger';
 import { ErrorHandler } from '../../utils/errors';
+import { escapeHtml, getNonce, cspMeta } from '../../utils/html';
+
+const esc = escapeHtml;
+const MAX_VERSION_ROWS = 50;
+// Messages that only read or navigate; everything else is a user action
+const NON_ACTION_MESSAGES = new Set(['switchTab', 'refresh', 'previewCommand', 'browseDefinitionFile', 'showOutput']);
 
 interface UpgradeInfo {
   currentVersionId: string;
@@ -29,12 +35,22 @@ interface DashboardData {
   targetOrg: string;
   definitionFiles: string[];
   packageDirectories: string[];
+  /** Data-loading failures, shown once as a banner instead of one popup each. */
+  loadErrors: string[];
 }
 
 export class DashboardWebview {
   private panel: vscode.WebviewPanel | undefined;
   private scratchOrgCommands: ScratchOrgCommands;
   private projectService: ProjectService | undefined;
+  private activeTab = 'scratch-orgs';
+  /** Incremented per refresh so a slow, older load can't overwrite a newer one. */
+  private renderToken = 0;
+  /** Number of dashboard actions in flight; they refresh the dashboard themselves. */
+  private actionsInFlight = 0;
+  private panelDisposables: vscode.Disposable[] = [];
+  /** Data changed while the panel was hidden; reload when it becomes visible. */
+  private stale = false;
 
   constructor(
     private cliExecutor: CliExecutor,
@@ -67,21 +83,77 @@ export class DashboardWebview {
       }
     );
 
-    await this.refreshData(initialTab);
-
-    this.panel.webview.onDidReceiveMessage(
-      async message => {
-        try {
-          await this.handleMessage(message);
-        } catch (error) {
-          ErrorHandler.handle(error, 'Dashboard error');
+    this.panelDisposables.push(
+      this.panel.webview.onDidReceiveMessage(message => this.onMessage(message)),
+      // Pick up changes made outside the dashboard (sidebar, command palette)
+      CliExecutor.onDidChangeData(() => this.onExternalDataChange()),
+      this.panel.onDidChangeViewState(e => {
+        if (e.webviewPanel.visible && this.stale) {
+          this.stale = false;
+          this.refreshData(this.activeTab, true);
         }
-      }
+      })
     );
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      clearTimeout(this.externalRefreshTimer);
+      this.panelDisposables.forEach(d => d.dispose());
+      this.panelDisposables = [];
     });
+
+    // Show the shell with a loading state right away, then load data
+    this.activeTab = initialTab;
+    this.panel.webview.html = this.getHtmlContent(this.emptyData(initialTab), true);
+    await this.refreshData(initialTab);
+  }
+
+  private externalRefreshTimer: NodeJS.Timeout | undefined;
+
+  private async onMessage(message: any): Promise<void> {
+    const isAction = !NON_ACTION_MESSAGES.has(message.command);
+    if (isAction) {
+      this.actionsInFlight++;
+    }
+    try {
+      await this.handleMessage(message);
+    } catch (error) {
+      ErrorHandler.handle(error, 'Dashboard error');
+    } finally {
+      if (isAction) {
+        this.actionsInFlight--;
+        this.panel?.webview.postMessage({ command: 'actionComplete', actionId: message.actionId });
+      }
+    }
+  }
+
+  private onExternalDataChange(): void {
+    // Dashboard actions refresh the affected tab themselves
+    if (this.actionsInFlight > 0 || !this.configService.getAutoRefresh() || !this.panel) {
+      return;
+    }
+    if (!this.panel.visible) {
+      this.stale = true;
+      return;
+    }
+    clearTimeout(this.externalRefreshTimer);
+    this.externalRefreshTimer = setTimeout(() => this.refreshData(this.activeTab, true), 500);
+  }
+
+  private emptyData(activeTab: string): DashboardData {
+    return {
+      activeTab,
+      scratchOrgs: [],
+      packages: [],
+      versions: [],
+      installedPackages: [],
+      upgradeInfo: new Map<string, UpgradeInfo>(),
+      devHub: this.configService.getDefaultDevHub(),
+      targetOrg: this.configService.getDefaultTargetOrg(),
+      definitionFiles: [],
+      packageDirectories: [],
+      loadErrors: []
+    };
   }
 
   private async handleMessage(message: any): Promise<void> {
@@ -91,7 +163,7 @@ export class DashboardWebview {
         break;
 
       case 'refresh':
-        await this.refreshData(message.tab || 'scratch-orgs');
+        await this.refreshData(message.tab || this.activeTab, true);
         break;
 
       // Scratch Org commands
@@ -105,7 +177,6 @@ export class DashboardWebview {
 
       case 'openScratchOrg':
         await this.scratchOrgCommands.openScratchOrg(message.username);
-        await this.refreshData('scratch-orgs');
         break;
 
       case 'setDefaultOrg':
@@ -123,6 +194,10 @@ export class DashboardWebview {
 
       case 'previewCommand':
         this.handlePreviewCommand(message.data);
+        break;
+
+      case 'showOutput':
+        Logger.show();
         break;
 
       // Package commands
@@ -213,7 +288,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage(`Scratch org "${data.alias}" created successfully!`);
       await this.refreshData('scratch-orgs');
     } else {
-      vscode.window.showErrorMessage(`Failed to create scratch org: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to create scratch org');
     }
   }
 
@@ -239,7 +314,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage(`Scratch org "${username}" deleted successfully`);
       await this.refreshData('scratch-orgs');
     } else {
-      vscode.window.showErrorMessage(`Failed to delete scratch org: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to delete scratch org');
     }
   }
 
@@ -330,7 +405,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage(`Package "${data.name}" created! ID: ${packageId}`);
       await this.refreshData('packages');
     } else {
-      vscode.window.showErrorMessage(`Failed to create package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to create package');
     }
   }
 
@@ -361,7 +436,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage(`Package "${packageName}" deleted successfully`);
       await this.refreshData('packages');
     } else {
-      vscode.window.showErrorMessage(`Failed to delete package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to delete package');
     }
   }
 
@@ -383,7 +458,7 @@ export class DashboardWebview {
     const versionsResult = await this.cliExecutor.execute('sf', args);
 
     if (!versionsResult.success) {
-      vscode.window.showErrorMessage(`Failed to fetch package versions: ${versionsResult.error}`);
+      ErrorHandler.handle(versionsResult.error, 'Failed to fetch package versions');
       return;
     }
 
@@ -531,7 +606,7 @@ export class DashboardWebview {
     if (result.success) {
       vscode.window.showInformationMessage(`Package "${packageName}" v${versionString} installed successfully!`);
     } else {
-      vscode.window.showErrorMessage(`Failed to install package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to install package');
     }
   }
 
@@ -572,7 +647,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage(`Package version created! ID: ${versionId}`);
       await this.refreshData('versions');
     } else {
-      vscode.window.showErrorMessage(`Failed to create version: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to create version');
     }
   }
 
@@ -603,7 +678,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage('Package version promoted to Released!');
       await this.refreshData('versions');
     } else {
-      vscode.window.showErrorMessage(`Failed to promote version: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to promote version');
     }
   }
 
@@ -634,7 +709,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage('Package version deleted successfully');
       await this.refreshData('versions');
     } else {
-      vscode.window.showErrorMessage(`Failed to delete version: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to delete version');
     }
   }
 
@@ -669,7 +744,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage('Package installed successfully!');
       await this.refreshData('installations');
     } else {
-      vscode.window.showErrorMessage(`Failed to install package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to install package');
     }
   }
 
@@ -700,7 +775,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage('Package uninstalled successfully');
       await this.refreshData('installations');
     } else {
-      vscode.window.showErrorMessage(`Failed to uninstall package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to uninstall package');
     }
   }
 
@@ -745,7 +820,7 @@ export class DashboardWebview {
       vscode.window.showInformationMessage('Package upgraded successfully!');
       await this.refreshData('installations');
     } else {
-      vscode.window.showErrorMessage(`Failed to upgrade package: ${result.error}`);
+      ErrorHandler.handle(result.error, 'Failed to upgrade package');
     }
   }
 
@@ -758,40 +833,52 @@ export class DashboardWebview {
   }
 
   // Data fetching
-  private async getPackages(): Promise<Package[]> {
+  private async getPackages(errors: string[]): Promise<Package[]> {
     const devHub = this.configService.getDefaultDevHub();
     if (!devHub) return [];
 
     try {
       const args = this.commandBuilder.buildPackageList(devHub);
       const result = await this.cliExecutor.execute('sf', args);
-      return result.success ? (result.data?.result || []) : [];
+      if (!result.success) {
+        errors.push(`Failed to load packages: ${result.error}`);
+        return [];
+      }
+      return result.data?.result || [];
     } catch {
       return [];
     }
   }
 
-  private async getVersions(): Promise<PackageVersion[]> {
+  private async getVersions(errors: string[]): Promise<PackageVersion[]> {
     const devHub = this.configService.getDefaultDevHub();
     if (!devHub) return [];
 
     try {
       const args = this.commandBuilder.buildPackageVersionList(devHub);
       const result = await this.cliExecutor.execute('sf', args);
-      return result.success ? (result.data?.result || []) : [];
+      if (!result.success) {
+        errors.push(`Failed to load package versions: ${result.error}`);
+        return [];
+      }
+      return result.data?.result || [];
     } catch {
       return [];
     }
   }
 
-  private async getInstalledPackages(): Promise<any[]> {
+  private async getInstalledPackages(errors: string[]): Promise<any[]> {
     const targetOrg = this.configService.getDefaultTargetOrg();
     if (!targetOrg) return [];
 
     try {
       const args = this.commandBuilder.buildPackageInstalledList(targetOrg);
       const result = await this.cliExecutor.execute('sf', args);
-      return result.success ? (result.data?.result || []) : [];
+      if (!result.success) {
+        errors.push(`Failed to load installed packages: ${result.error}`);
+        return [];
+      }
+      return result.data?.result || [];
     } catch {
       return [];
     }
@@ -813,13 +900,13 @@ export class DashboardWebview {
   private computeUpgradeInfo(installedPackages: any[], versions: PackageVersion[], packages: Package[]): Map<string, UpgradeInfo> {
     const upgradeInfo = new Map<string, UpgradeInfo>();
 
-    Logger.info(`computeUpgradeInfo: ${installedPackages.length} installed, ${versions.length} versions, ${packages.length} packages`);
+    Logger.debug(`computeUpgradeInfo: ${installedPackages.length} installed, ${versions.length} versions, ${packages.length} packages`);
 
     for (const installed of installedPackages) {
       const currentVersionId = installed.SubscriberPackageVersionId;
       const installedPackageName = installed.SubscriberPackageName;
 
-      Logger.info(`Checking installed package: "${installedPackageName}" (${currentVersionId})`);
+      Logger.debug(`Checking installed package: "${installedPackageName}" (${currentVersionId})`);
 
       // Find the Package2Id from our packages list by matching the package name
       // This is needed because SubscriberPackageId (033...) differs from Package2Id (0Ho...)
@@ -827,12 +914,12 @@ export class DashboardWebview {
 
       if (!matchingPackage) {
         // Package not found in our Dev Hub - might be from another source
-        Logger.info(`  No matching package found in Dev Hub for "${installedPackageName}". Available packages: ${packages.map(p => p.Name).join(', ')}`);
+        Logger.debug(`  No matching package found in Dev Hub for "${installedPackageName}". Available packages: ${packages.map(p => p.Name).join(', ')}`);
         continue;
       }
 
       const package2Id = matchingPackage.Id;
-      Logger.info(`  Found matching package: ${matchingPackage.Name} (${package2Id})`);
+      Logger.debug(`  Found matching package: ${matchingPackage.Name} (${package2Id})`);
 
       // Find all versions for this package
       const packageVersions = versions
@@ -845,18 +932,18 @@ export class DashboardWebview {
           return b.BuildNumber - a.BuildNumber;
         });
 
-      Logger.info(`  Found ${packageVersions.length} versions for this package`);
+      Logger.debug(`  Found ${packageVersions.length} versions for this package`);
 
       // Find the currently installed version to check if it's a beta
       const currentVersion = packageVersions.find(v => v.SubscriberPackageVersionId === currentVersionId);
       const currentIsBeta = currentVersion ? !currentVersion.IsReleased : false;
 
-      Logger.info(`  Current version is ${currentIsBeta ? 'Beta' : 'Released'}`);
+      Logger.debug(`  Current version is ${currentIsBeta ? 'Beta' : 'Released'}`);
 
       // Beta packages cannot be upgraded - they must be uninstalled and reinstalled
       // Only allow upgrades from released versions
       if (currentIsBeta) {
-        Logger.info(`  Skipping upgrade check - beta packages cannot be upgraded`);
+        Logger.debug(`  Skipping upgrade check - beta packages cannot be upgraded`);
         upgradeInfo.set(currentVersionId, {
           currentVersionId,
           latestVersionId: currentVersionId,
@@ -872,7 +959,7 @@ export class DashboardWebview {
         const latestVersion = packageVersions[0];
         const hasUpgrade = latestVersion.SubscriberPackageVersionId !== currentVersionId;
 
-        Logger.info(`  Latest version: ${latestVersion.SubscriberPackageVersionId} (${latestVersion.IsReleased ? 'Released' : 'Beta'}), current: ${currentVersionId}, hasUpgrade: ${hasUpgrade}`);
+        Logger.debug(`  Latest version: ${latestVersion.SubscriberPackageVersionId} (${latestVersion.IsReleased ? 'Released' : 'Beta'}), current: ${currentVersionId}, hasUpgrade: ${hasUpgrade}`);
 
         upgradeInfo.set(currentVersionId, {
           currentVersionId,
@@ -885,48 +972,47 @@ export class DashboardWebview {
       }
     }
 
-    Logger.info(`computeUpgradeInfo result: ${upgradeInfo.size} entries`);
+    Logger.debug(`computeUpgradeInfo result: ${upgradeInfo.size} entries`);
     return upgradeInfo;
   }
 
-  private async refreshData(activeTab: string): Promise<void> {
+  private async refreshData(activeTab: string, force = false): Promise<void> {
     if (!this.panel) return;
+
+    const token = ++this.renderToken;
+    this.activeTab = activeTab;
 
     // Show loading state
     this.panel.webview.postMessage({ command: 'loading', tab: activeTab });
 
-    const data: DashboardData = {
-      activeTab,
-      scratchOrgs: [],
-      packages: [],
-      versions: [],
-      installedPackages: [],
-      upgradeInfo: new Map<string, UpgradeInfo>(),
-      devHub: this.configService.getDefaultDevHub(),
-      targetOrg: this.configService.getDefaultTargetOrg(),
-      definitionFiles: [],
-      packageDirectories: []
-    };
+    const data = this.emptyData(activeTab);
 
-    // Load data based on active tab to avoid unnecessary API calls
+    // Load only what the active tab needs, in parallel
     switch (activeTab) {
       case 'scratch-orgs':
-        data.scratchOrgs = await this.scratchOrgCommands.getScratchOrgs();
-        data.definitionFiles = await this.scratchOrgCommands.getDefinitionFiles();
+        [data.scratchOrgs, data.definitionFiles] = await Promise.all([
+          this.scratchOrgCommands.getScratchOrgs(force),
+          this.scratchOrgCommands.getDefinitionFiles()
+        ]);
         break;
       case 'packages':
-        data.packages = await this.getPackages();
-        data.packageDirectories = await this.getPackageDirectories();
+        [data.packages, data.packageDirectories] = await Promise.all([
+          this.getPackages(data.loadErrors),
+          this.getPackageDirectories()
+        ]);
         break;
       case 'versions':
-        data.packages = await this.getPackages();
-        data.versions = await this.getVersions();
+        [data.packages, data.versions] = await Promise.all([
+          this.getPackages(data.loadErrors),
+          this.getVersions(data.loadErrors)
+        ]);
         break;
       case 'installations':
-        data.installedPackages = await this.getInstalledPackages();
-        data.versions = await this.getVersions();
-        data.packages = await this.getPackages();
-        // Compute upgrade info for each installed package
+        [data.installedPackages, data.versions, data.packages] = await Promise.all([
+          this.getInstalledPackages(data.loadErrors),
+          this.getVersions(data.loadErrors),
+          this.getPackages(data.loadErrors)
+        ]);
         // Need packages to map SubscriberPackageId (033...) to Package2Id (0Ho...)
         data.upgradeInfo = this.computeUpgradeInfo(data.installedPackages, data.versions, data.packages);
         break;
@@ -935,60 +1021,78 @@ export class DashboardWebview {
         break;
     }
 
+    // A newer refresh (e.g. the user switched tabs again) supersedes this one
+    if (!this.panel || token !== this.renderToken) {
+      return;
+    }
+
     this.panel.webview.html = this.getHtmlContent(data);
   }
 
-  private getHtmlContent(data: DashboardData): string {
+  private getHtmlContent(data: DashboardData, loading = false): string {
+    const webview = this.panel!.webview;
+    const nonce = getNonce();
+    const tabs: [string, string][] = [
+      ['scratch-orgs', 'Scratch Orgs'],
+      ['packages', 'Packages'],
+      ['versions', 'Versions'],
+      ['installations', 'Installations'],
+      ['settings', 'Settings']
+    ];
+    const tabButtons = tabs
+      .map(([id, label]) => `<button class="tab ${data.activeTab === id ? 'active' : ''}" data-tab="${id}">${label}</button>`)
+      .join('\n      ');
+
+    let content: string;
+    if (loading) {
+      content = '<div class="loading-placeholder">Loading…</div>';
+    } else {
+      // Only the active tab has data loaded, so only the active tab is rendered
+      const render = (d: DashboardData): string => {
+        switch (d.activeTab) {
+          case 'packages': return this.getPackagesTabHtml(d);
+          case 'versions': return this.getVersionsTabHtml(d);
+          case 'installations': return this.getInstallationsTabHtml(d);
+          case 'settings': return this.getSettingsTabHtml(d);
+          default: return this.getScratchOrgsTabHtml(d);
+        }
+      };
+      const banner = data.loadErrors.length > 0
+        ? `<div class="error-banner" role="alert"><div>${data.loadErrors.map(e => `<div>${esc(e)}</div>`).join('')}</div><button class="btn btn-secondary btn-sm" id="showOutput">Show Output</button></div>`
+        : '';
+      content = `${banner}<div id="${esc(data.activeTab)}" class="tab-pane active">${render(data)}</div>`;
+    }
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  ${cspMeta(webview.cspSource, nonce)}
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SF Package Manager Dashboard</title>
   <style>${this.getStyles()}</style>
 </head>
-<body>
+<body class="${loading ? 'is-loading' : ''}">
   <div class="dashboard">
     <div class="header">
       <h1>SF Package Manager Dashboard</h1>
       <div class="header-info">
-        <span><strong>Dev Hub:</strong> ${data.devHub || 'Not configured'}</span>
-        <span><strong>Target Org:</strong> ${data.targetOrg || 'Not set'}</span>
+        <span><strong>Dev Hub:</strong> ${esc(data.devHub || 'Not configured')}</span>
+        <span><strong>Target Org:</strong> ${esc(data.targetOrg || 'Not set')}</span>
       </div>
     </div>
 
     <nav class="tab-bar">
-      <button class="tab ${data.activeTab === 'scratch-orgs' ? 'active' : ''}" data-tab="scratch-orgs">Scratch Orgs</button>
-      <button class="tab ${data.activeTab === 'packages' ? 'active' : ''}" data-tab="packages">Packages</button>
-      <button class="tab ${data.activeTab === 'versions' ? 'active' : ''}" data-tab="versions">Versions</button>
-      <button class="tab ${data.activeTab === 'installations' ? 'active' : ''}" data-tab="installations">Installations</button>
-      <button class="tab ${data.activeTab === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
+      ${tabButtons}
     </nav>
+    <div class="loading-bar" role="progressbar" aria-label="Loading"></div>
 
     <div class="tab-content">
-      <div id="scratch-orgs" class="tab-pane ${data.activeTab === 'scratch-orgs' ? 'active' : ''}">
-        ${this.getScratchOrgsTabHtml(data)}
-      </div>
-
-      <div id="packages" class="tab-pane ${data.activeTab === 'packages' ? 'active' : ''}">
-        ${this.getPackagesTabHtml(data)}
-      </div>
-
-      <div id="versions" class="tab-pane ${data.activeTab === 'versions' ? 'active' : ''}">
-        ${this.getVersionsTabHtml(data)}
-      </div>
-
-      <div id="installations" class="tab-pane ${data.activeTab === 'installations' ? 'active' : ''}">
-        ${this.getInstallationsTabHtml(data)}
-      </div>
-
-      <div id="settings" class="tab-pane ${data.activeTab === 'settings' ? 'active' : ''}">
-        ${this.getSettingsTabHtml(data)}
-      </div>
+      ${content}
     </div>
   </div>
 
-  <script>${this.getScripts()}</script>
+  <script nonce="${nonce}">${this.getScripts()}</script>
 </body>
 </html>`;
   }
@@ -1034,7 +1138,27 @@ export class DashboardWebview {
       background: var(--vscode-tab-activeBackground);
       border-bottom-color: var(--vscode-focusBorder);
     }
-    .tab-content { flex: 1; overflow-y: auto; padding: 20px; }
+    .loading-bar { height: 2px; position: relative; overflow: hidden; visibility: hidden; }
+    .loading-bar::before {
+      content: ''; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+      background: var(--vscode-progressBar-background);
+      animation: loading-slide 1.2s ease-in-out infinite;
+    }
+    body.is-loading .loading-bar { visibility: visible; }
+    body.is-loading .tab-content { opacity: 0.6; pointer-events: none; }
+    @keyframes loading-slide { 0% { left: -40%; } 100% { left: 100%; } }
+    .error-banner {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+      padding: 10px 14px; margin-bottom: 16px; border-radius: 4px;
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      font-size: 12px; white-space: pre-wrap;
+    }
+    .loading-placeholder {
+      padding: 60px 20px; text-align: center;
+      color: var(--vscode-descriptionForeground);
+    }
+    .tab-content { flex: 1; overflow-y: auto; padding: 20px; transition: opacity 0.15s; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
     .section {
@@ -1061,6 +1185,12 @@ export class DashboardWebview {
     }
     .table tr:hover { background: var(--vscode-list-hoverBackground); }
     .table tr:last-child td { border-bottom: none; }
+    .table-note {
+      padding: 8px 12px; font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      border-top: 1px solid var(--vscode-panel-border);
+    }
+    .mono { font-family: var(--vscode-editor-font-family); font-size: 12px; }
     .status-badge {
       display: inline-block; padding: 2px 8px; border-radius: 10px;
       font-size: 11px; font-weight: 500;
@@ -1076,6 +1206,13 @@ export class DashboardWebview {
     }
     .btn:hover { opacity: 0.85; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.busy { cursor: progress; }
+    .btn.busy::before {
+      content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+      border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+      animation: spin 0.8s linear infinite; vertical-align: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .btn-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
     .btn-secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
     .btn-danger { background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); }
@@ -1131,163 +1268,186 @@ export class DashboardWebview {
     }`;
   }
 
+  /**
+   * Client-side script. Actions carry an actionId; the extension answers with
+   * "actionComplete" so the clicked button can leave its busy state.
+   * (Plain string concatenation only: this is inside a TypeScript template.)
+   */
   private getScripts(): string {
     return `
     const vscode = acquireVsCodeApi();
+    let nextActionId = 1;
+    const busyElements = new Map();
 
-    // Tab switching
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        if (tab.disabled) return;
-        vscode.postMessage({ command: 'switchTab', tab: tab.dataset.tab });
+    function setLoading(on) {
+      document.body.classList.toggle('is-loading', on);
+    }
+
+    function setBusy(el, on) {
+      if (!el) return;
+      if (on) {
+        el.dataset.label = el.textContent;
+        el.textContent = 'Working…';
+        el.disabled = true;
+        el.classList.add('busy');
+      } else {
+        if (el.dataset.label !== undefined) el.textContent = el.dataset.label;
+        el.disabled = false;
+        el.classList.remove('busy');
+      }
+    }
+
+    function runAction(el, command, payload) {
+      const actionId = nextActionId++;
+      if (el) {
+        busyElements.set(actionId, el);
+        setBusy(el, true);
+      }
+      vscode.postMessage(Object.assign({ command: command, actionId: actionId }, payload || {}));
+    }
+
+    function onClick(selector, handler) {
+      document.querySelectorAll(selector).forEach(el => el.addEventListener('click', () => handler(el)));
+    }
+
+    function onSubmit(formId, handler) {
+      const form = document.getElementById(formId);
+      if (!form) return;
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        handler(form.querySelector('button[type="submit"]'));
       });
+    }
+
+    function value(id) {
+      const el = document.getElementById(id);
+      return el ? el.value : undefined;
+    }
+
+    function checked(id) {
+      const el = document.getElementById(id);
+      return el ? el.checked : undefined;
+    }
+
+    // Tab switching: highlight immediately, then load
+    onClick('.tab', tab => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+      setLoading(true);
+      vscode.postMessage({ command: 'switchTab', tab: tab.dataset.tab });
     });
 
     // Refresh buttons
-    document.querySelectorAll('[data-refresh]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        vscode.postMessage({ command: 'refresh', tab: btn.dataset.refresh });
-      });
+    onClick('[data-refresh]', btn => {
+      setLoading(true);
+      vscode.postMessage({ command: 'refresh', tab: btn.dataset.refresh });
     });
 
     // Scratch Org actions
-    document.querySelectorAll('.open-org').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'openScratchOrg', username: btn.dataset.username }));
-    });
-    document.querySelectorAll('.set-default').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'setDefaultOrg', username: btn.dataset.username }));
-    });
-    document.querySelectorAll('.delete-org').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'deleteScratchOrg', username: btn.dataset.username }));
-    });
+    onClick('.open-org', btn => runAction(btn, 'openScratchOrg', { username: btn.dataset.username }));
+    onClick('.set-default', btn => runAction(btn, 'setDefaultOrg', { username: btn.dataset.username }));
+    onClick('.delete-org', btn => runAction(btn, 'deleteScratchOrg', { username: btn.dataset.username }));
 
     // Package actions
-    document.querySelectorAll('.install-package').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({
-        command: 'installLatestVersion',
-        packageId: btn.dataset.packageid,
-        packageName: btn.dataset.packagename
-      }));
-    });
-    document.querySelectorAll('.delete-package').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({
-        command: 'deletePackage',
-        packageId: btn.dataset.packageid,
-        packageName: btn.dataset.packagename
-      }));
-    });
+    onClick('.install-package', btn => runAction(btn, 'installLatestVersion', {
+      packageId: btn.dataset.packageid,
+      packageName: btn.dataset.packagename
+    }));
+    onClick('.delete-package', btn => runAction(btn, 'deletePackage', {
+      packageId: btn.dataset.packageid,
+      packageName: btn.dataset.packagename
+    }));
 
     // Version actions
-    document.querySelectorAll('.promote-version').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'promoteVersion', versionId: btn.dataset.versionid }));
-    });
-    document.querySelectorAll('.delete-version').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'deleteVersion', versionId: btn.dataset.versionid }));
-    });
+    onClick('.promote-version', btn => runAction(btn, 'promoteVersion', { versionId: btn.dataset.versionid }));
+    onClick('.delete-version', btn => runAction(btn, 'deleteVersion', { versionId: btn.dataset.versionid }));
 
     // Installation actions
-    document.querySelectorAll('.uninstall-package').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({ command: 'uninstallPackage', packageId: btn.dataset.packageid }));
-    });
-    document.querySelectorAll('.upgrade-package').forEach(btn => {
-      btn.addEventListener('click', () => vscode.postMessage({
-        command: 'upgradePackage',
-        packageId: btn.dataset.packageid,
-        targetVersionId: btn.dataset.targetversionid
-      }));
-    });
+    onClick('.uninstall-package', btn => runAction(btn, 'uninstallPackage', { packageId: btn.dataset.packageid }));
+    onClick('.upgrade-package', btn => runAction(btn, 'upgradePackage', {
+      packageId: btn.dataset.packageid,
+      targetVersionId: btn.dataset.targetversionid
+    }));
 
     // Settings actions
-    document.getElementById('switchDevHub')?.addEventListener('click', () => vscode.postMessage({ command: 'switchDevHub' }));
-    document.getElementById('switchTargetOrg')?.addEventListener('click', () => vscode.postMessage({ command: 'switchTargetOrg' }));
+    onClick('#switchDevHub', btn => runAction(btn, 'switchDevHub'));
+    onClick('#switchTargetOrg', btn => runAction(btn, 'switchTargetOrg'));
 
-    // Browse definition file
-    document.getElementById('browseDefFile')?.addEventListener('click', () => vscode.postMessage({ command: 'browseDefinitionFile' }));
+    // Browse definition file / preview command
+    onClick('#browseDefFile', () => vscode.postMessage({ command: 'browseDefinitionFile' }));
+    onClick('#showOutput', () => vscode.postMessage({ command: 'showOutput' }));
+    onClick('#previewCmd', () => vscode.postMessage({ command: 'previewCommand', data: getCreateOrgFormData() }));
 
-    // Preview command
-    document.getElementById('previewCmd')?.addEventListener('click', () => {
-      vscode.postMessage({ command: 'previewCommand', data: getCreateOrgFormData() });
-    });
+    // Install form: picking a released version fills in the ID
+    const versionSelect = document.getElementById('instVersionSelect');
+    if (versionSelect) {
+      versionSelect.addEventListener('change', () => {
+        const idInput = document.getElementById('instVersionId');
+        if (idInput && versionSelect.value) idInput.value = versionSelect.value;
+      });
+    }
 
     // Form submissions
-    document.getElementById('createOrgForm')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      vscode.postMessage({ command: 'createScratchOrg', data: getCreateOrgFormData() });
-    });
+    onSubmit('createOrgForm', btn => runAction(btn, 'createScratchOrg', { data: getCreateOrgFormData() }));
 
-    document.getElementById('generateDefForm')?.addEventListener('submit', (e) => {
-      e.preventDefault();
+    onSubmit('generateDefForm', btn => {
       const features = [];
       document.querySelectorAll('input[name="features"]:checked').forEach(cb => features.push(cb.value));
-      vscode.postMessage({
-        command: 'generateScratchDef',
+      runAction(btn, 'generateScratchDef', {
         data: {
-          orgName: document.getElementById('defOrgName')?.value,
-          edition: document.getElementById('defEdition')?.value,
+          orgName: value('defOrgName'),
+          edition: value('defEdition'),
           features: features,
-          enableLightningExperience: document.getElementById('defLightning')?.checked
+          enableLightningExperience: checked('defLightning')
         }
       });
     });
 
-    document.getElementById('createPackageForm')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      vscode.postMessage({
-        command: 'createPackage',
-        data: {
-          name: document.getElementById('pkgName')?.value,
-          packageType: document.getElementById('pkgType')?.value,
-          path: document.getElementById('pkgPath')?.value,
-          description: document.getElementById('pkgDescription')?.value,
-          noNamespace: document.getElementById('pkgNoNamespace')?.checked,
-          orgDependent: document.getElementById('pkgOrgDependent')?.checked
-        }
-      });
-    });
+    onSubmit('createPackageForm', btn => runAction(btn, 'createPackage', {
+      data: {
+        name: value('pkgName'),
+        packageType: value('pkgType'),
+        path: value('pkgPath'),
+        description: value('pkgDescription'),
+        noNamespace: checked('pkgNoNamespace'),
+        orgDependent: checked('pkgOrgDependent')
+      }
+    }));
 
-    document.getElementById('createVersionForm')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      vscode.postMessage({
-        command: 'createVersion',
-        data: {
-          packageId: document.getElementById('verPackageId')?.value,
-          versionName: document.getElementById('verName')?.value,
-          versionNumber: document.getElementById('verNumber')?.value,
-          versionDescription: document.getElementById('verDescription')?.value,
-          installationKeyBypass: document.getElementById('verKeyBypass')?.checked,
-          installationKey: document.getElementById('verKey')?.value,
-          codeCoverage: document.getElementById('verCodeCoverage')?.checked,
-          skipValidation: document.getElementById('verSkipValidation')?.checked,
-          skipAncestorCheck: document.getElementById('verSkipAncestorCheck')?.checked,
-          wait: document.getElementById('verWait')?.value
-        }
-      });
-    });
+    onSubmit('createVersionForm', btn => runAction(btn, 'createVersion', {
+      data: {
+        packageId: value('verPackageId'),
+        versionName: value('verName'),
+        versionNumber: value('verNumber'),
+        versionDescription: value('verDescription'),
+        installationKeyBypass: checked('verKeyBypass'),
+        installationKey: value('verKey'),
+        codeCoverage: checked('verCodeCoverage'),
+        skipValidation: checked('verSkipValidation'),
+        skipAncestorCheck: checked('verSkipAncestorCheck'),
+        wait: value('verWait')
+      }
+    }));
 
-    document.getElementById('installPackageForm')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      vscode.postMessage({
-        command: 'installPackage',
-        data: {
-          packageVersionId: document.getElementById('instVersionId')?.value,
-          installationKey: document.getElementById('instKey')?.value,
-          wait: document.getElementById('instWait')?.value,
-          securityType: document.getElementById('instSecurityType')?.value
-        }
-      });
-    });
+    onSubmit('installPackageForm', btn => runAction(btn, 'installPackage', {
+      data: {
+        packageVersionId: value('instVersionId'),
+        installationKey: value('instKey'),
+        wait: value('instWait'),
+        securityType: value('instSecurityType')
+      }
+    }));
 
     function getCreateOrgFormData() {
       return {
-        definitionFile: document.getElementById('definitionFile')?.value,
-        alias: document.getElementById('alias')?.value,
-        durationDays: document.getElementById('durationDays')?.value,
-        wait: document.getElementById('wait')?.value,
-        setDefault: document.getElementById('setDefault')?.checked,
-        noAncestors: document.getElementById('noAncestors')?.checked,
-        noNamespace: document.getElementById('noNamespace')?.checked,
-        adminEmail: document.getElementById('adminEmail')?.value,
-        description: document.getElementById('description')?.value
+        definitionFile: value('definitionFile'),
+        alias: value('alias'),
+        durationDays: value('durationDays'),
+        wait: value('wait'),
+        setDefault: checked('setDefault'),
+        noAncestors: checked('noAncestors'),
+        noNamespace: checked('noNamespace'),
+        adminEmail: value('adminEmail'),
+        description: value('description')
       };
     }
 
@@ -1295,17 +1455,36 @@ export class DashboardWebview {
     window.addEventListener('message', event => {
       const message = event.data;
       switch (message.command) {
-        case 'definitionFileSelected':
-          const defFileInput = document.getElementById('definitionFile');
-          if (defFileInput) defFileInput.value = message.path;
+        case 'loading':
+          setLoading(true);
           break;
-        case 'commandPreview':
+        case 'actionComplete': {
+          const el = busyElements.get(message.actionId);
+          busyElements.delete(message.actionId);
+          setBusy(el, false);
+          break;
+        }
+        case 'definitionFileSelected': {
+          const defFileInput = document.getElementById('definitionFile');
+          if (defFileInput) {
+            if (defFileInput.tagName === 'SELECT' && !Array.from(defFileInput.options).some(o => o.value === message.path)) {
+              const option = document.createElement('option');
+              option.value = message.path;
+              option.textContent = message.path;
+              defFileInput.appendChild(option);
+            }
+            defFileInput.value = message.path;
+          }
+          break;
+        }
+        case 'commandPreview': {
           const previewEl = document.getElementById('commandPreview');
           if (previewEl) {
             previewEl.textContent = message.preview;
             previewEl.style.display = 'block';
           }
           break;
+        }
       }
     });`;
   }
@@ -1316,22 +1495,23 @@ export class DashboardWebview {
           const isDefault = org.username === data.targetOrg || org.alias === data.targetOrg;
           const expirationDate = org.expirationDate ? new Date(org.expirationDate).toLocaleDateString() : 'N/A';
           const isExpired = org.expirationDate && new Date(org.expirationDate) < new Date();
+          const username = esc(org.username);
           return `<tr>
-            <td>${org.alias || '-'} ${isDefault ? '<span class="status-badge status-default">Default</span>' : ''}</td>
-            <td>${org.username}</td>
+            <td>${esc(org.alias || '-')} ${isDefault ? '<span class="status-badge status-default">Default</span>' : ''}</td>
+            <td>${username}</td>
             <td><span class="status-badge ${isExpired ? 'status-expired' : 'status-active'}">${isExpired ? 'Expired' : 'Active'}</span></td>
-            <td>${expirationDate}</td>
+            <td>${esc(expirationDate)}</td>
             <td><div class="btn-group">
-              <button class="btn btn-primary btn-sm open-org" data-username="${org.username}">Open</button>
-              ${!isDefault ? `<button class="btn btn-secondary btn-sm set-default" data-username="${org.username}">Set Default</button>` : ''}
-              <button class="btn btn-danger btn-sm delete-org" data-username="${org.username}">Delete</button>
+              <button class="btn btn-primary btn-sm open-org" data-username="${username}">Open</button>
+              ${!isDefault ? `<button class="btn btn-secondary btn-sm set-default" data-username="${username}">Set Default</button>` : ''}
+              <button class="btn btn-danger btn-sm delete-org" data-username="${username}">Delete</button>
             </div></td>
           </tr>`;
         }).join('')
-      : '<tr><td colspan="5" class="empty-state">No scratch orgs found</td></tr>';
+      : '<tr><td colspan="5" class="empty-state">No scratch orgs found. Create one below.</td></tr>';
 
     const defOptions = data.definitionFiles.length > 0
-      ? data.definitionFiles.map(f => `<option value="${f}">${f}</option>`).join('')
+      ? data.definitionFiles.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')
       : '<option value="">No definition files found</option>';
 
     return `
@@ -1386,18 +1566,18 @@ export class DashboardWebview {
     const targetOrg = data.targetOrg;
     const packagesRows = data.packages.length > 0
       ? data.packages.map(pkg => `<tr>
-          <td>${pkg.Name}</td>
-          <td><span class="status-badge ${pkg.ContainerOptions === 'Managed' ? 'status-managed' : 'status-unlocked'}">${pkg.ContainerOptions}</span></td>
-          <td>${pkg.Id}</td>
-          <td>${pkg.NamespacePrefix || '-'}</td>
+          <td>${esc(pkg.Name)}</td>
+          <td><span class="status-badge ${pkg.ContainerOptions === 'Managed' ? 'status-managed' : 'status-unlocked'}">${esc(pkg.ContainerOptions)}</span></td>
+          <td class="mono">${esc(pkg.Id)}</td>
+          <td>${esc(pkg.NamespacePrefix || '-')}</td>
           <td><div class="btn-group">
-            <button class="btn btn-primary btn-sm install-package" data-packageid="${pkg.Id}" data-packagename="${pkg.Name}" ${!targetOrg ? 'disabled title="No target org configured"' : ''}>Install</button>
-            <button class="btn btn-danger btn-sm delete-package" data-packageid="${pkg.Id}" data-packagename="${pkg.Name}">Delete</button>
+            <button class="btn btn-primary btn-sm install-package" data-packageid="${esc(pkg.Id)}" data-packagename="${esc(pkg.Name)}" ${!targetOrg ? 'disabled title="No target org configured"' : ''}>Install</button>
+            <button class="btn btn-danger btn-sm delete-package" data-packageid="${esc(pkg.Id)}" data-packagename="${esc(pkg.Name)}">Delete</button>
           </div></td>
         </tr>`).join('')
       : '<tr><td colspan="5" class="empty-state">No packages found. Create one below.</td></tr>';
 
-    const pathOptions = data.packageDirectories.map(p => `<option value="${p}">${p}</option>`).join('');
+    const pathOptions = data.packageDirectories.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
 
     return `
       <div class="section">
@@ -1427,30 +1607,44 @@ export class DashboardWebview {
   }
 
   private getVersionsTabHtml(data: DashboardData): string {
-    const versionsRows = data.versions.length > 0
-      ? data.versions.slice(0, 50).map(ver => {
+    const packageNames = new Map(data.packages.map(p => [p.Id, p.Name]));
+    const sorted = [...data.versions].sort((a, b) => {
+      const byDate = new Date(b.CreatedDate).getTime() - new Date(a.CreatedDate).getTime();
+      return isNaN(byDate) || byDate === 0 ? compareVersionNumbers(b, a) : byDate;
+    });
+    const shown = sorted.slice(0, MAX_VERSION_ROWS);
+
+    const versionsRows = shown.length > 0
+      ? shown.map(ver => {
           const versionNum = `${ver.MajorVersion}.${ver.MinorVersion}.${ver.PatchVersion}.${ver.BuildNumber}`;
+          const versionId = esc(ver.SubscriberPackageVersionId);
           return `<tr>
-            <td>${ver.Name || '-'}</td>
-            <td>${versionNum}</td>
+            <td>${esc(packageNames.get(ver.Package2Id) || ver.Package2Id)}</td>
+            <td>${esc(ver.Name || '-')}</td>
+            <td>${esc(versionNum)}</td>
             <td><span class="status-badge ${ver.IsReleased ? 'status-released' : 'status-beta'}">${ver.IsReleased ? 'Released' : 'Beta'}</span></td>
-            <td>${ver.SubscriberPackageVersionId}</td>
-            <td>${ver.CodeCoverage !== undefined ? ver.CodeCoverage + '%' : '-'}</td>
+            <td class="mono">${versionId}</td>
+            <td>${esc(formatCoverage(ver.CodeCoverage))}</td>
             <td><div class="btn-group">
-              ${!ver.IsReleased ? `<button class="btn btn-success btn-sm promote-version" data-versionid="${ver.SubscriberPackageVersionId}">Promote</button>` : ''}
-              <button class="btn btn-danger btn-sm delete-version" data-versionid="${ver.SubscriberPackageVersionId}">Delete</button>
+              ${!ver.IsReleased ? `<button class="btn btn-success btn-sm promote-version" data-versionid="${versionId}">Promote</button>` : ''}
+              ${!ver.IsReleased ? `<button class="btn btn-danger btn-sm delete-version" data-versionid="${versionId}">Delete</button>` : ''}
             </div></td>
           </tr>`;
         }).join('')
-      : '<tr><td colspan="6" class="empty-state">No versions found. Create one below.</td></tr>';
+      : '<tr><td colspan="7" class="empty-state">No versions found. Create one below.</td></tr>';
 
-    const pkgOptions = data.packages.map(p => `<option value="${p.Id}">${p.Name} (${p.Id})</option>`).join('');
+    const truncationNote = sorted.length > shown.length
+      ? `<div class="table-note">Showing the ${shown.length} most recently created of ${sorted.length} versions.</div>`
+      : '';
+
+    const pkgOptions = data.packages.map(p => `<option value="${esc(p.Id)}">${esc(p.Name)} (${esc(p.Id)})</option>`).join('');
 
     return `
       <div class="section">
         <div class="section-header"><h2>Package Versions</h2><button class="btn btn-secondary btn-sm" data-refresh="versions">Refresh</button></div>
         <div class="section-content" style="padding:0">
-          <table class="table"><thead><tr><th>Name</th><th>Version</th><th>Status</th><th>Subscriber ID</th><th>Coverage</th><th>Actions</th></tr></thead><tbody>${versionsRows}</tbody></table>
+          <table class="table"><thead><tr><th>Package</th><th>Name</th><th>Version</th><th>Status</th><th>Subscriber ID</th><th>Coverage</th><th>Actions</th></tr></thead><tbody>${versionsRows}</tbody></table>
+          ${truncationNote}
         </div>
       </div>
       <div class="section">
@@ -1470,7 +1664,7 @@ export class DashboardWebview {
                 <label class="checkbox-item"><input type="checkbox" id="verSkipValidation">Skip validation</label>
                 <label class="checkbox-item"><input type="checkbox" id="verSkipAncestorCheck">Skip ancestor check</label>
               </div></div>
-              <div class="form-group"><label>Wait Time (minutes)</label><input type="number" id="verWait" value="10" min="0" max="120"></div>
+              <div class="form-group"><label>Wait Time (minutes)</label><input type="number" id="verWait" value="${this.configService.getDefaultWaitTime()}" min="0" max="120"></div>
             </div>
             <div class="form-actions"><button type="submit" class="btn btn-primary">Create Version</button></div>
           </form>
@@ -1485,23 +1679,24 @@ export class DashboardWebview {
           const hasUpgrade = upgradeInfo?.hasUpgrade || false;
           const currentIsBeta = upgradeInfo?.currentIsBeta || false;
           const targetIsBeta = upgradeInfo?.targetIsBeta || false;
+          const latestVersion = esc(upgradeInfo?.latestVersionNumber);
 
           // Build upgrade button (only shown for released packages that have an upgrade available)
           let upgradeButton = '';
           if (hasUpgrade && !currentIsBeta) {
             const upgradeButtonLabel = targetIsBeta ? 'Upgrade (Beta)' : 'Upgrade';
             const upgradeButtonTitle = targetIsBeta
-              ? `Upgrade to v${upgradeInfo?.latestVersionNumber} (Beta - for scratch/sandbox orgs only)`
-              : `Upgrade to v${upgradeInfo?.latestVersionNumber}`;
+              ? `Upgrade to v${latestVersion} (Beta - for scratch/sandbox orgs only)`
+              : `Upgrade to v${latestVersion}`;
             upgradeButton = `<button class="btn btn-success btn-sm upgrade-package"
-                data-packageid="${pkg.SubscriberPackageVersionId}"
-                data-targetversionid="${upgradeInfo?.latestVersionId}"
-                data-targetversion="${upgradeInfo?.latestVersionNumber}"
+                data-packageid="${esc(pkg.SubscriberPackageVersionId)}"
+                data-targetversionid="${esc(upgradeInfo?.latestVersionId)}"
+                data-targetversion="${latestVersion}"
                 title="${upgradeButtonTitle}">${upgradeButtonLabel}</button>`;
           }
 
           // Build version display with appropriate badge
-          let versionDisplay = pkg.SubscriberPackageVersionNumber || '-';
+          let versionDisplay = esc(pkg.SubscriberPackageVersionNumber || '-');
           if (currentIsBeta) {
             // Show beta badge for currently installed beta versions
             versionDisplay = `${versionDisplay} <span class="status-badge status-beta" style="margin-left:6px" title="Beta packages must be uninstalled to upgrade">Beta</span>`;
@@ -1509,24 +1704,24 @@ export class DashboardWebview {
             // Show update badge for released packages with available upgrade
             const badgeClass = targetIsBeta ? 'status-beta' : 'status-released';
             const badgeText = targetIsBeta ? 'Beta Available' : 'Update';
-            versionDisplay = `${versionDisplay} <span class="status-badge ${badgeClass}" style="margin-left:6px" title="v${upgradeInfo?.latestVersionNumber} available">${badgeText}</span>`;
+            versionDisplay = `${versionDisplay} <span class="status-badge ${badgeClass}" style="margin-left:6px" title="v${latestVersion} available">${badgeText}</span>`;
           }
 
           return `<tr>
-          <td>${pkg.SubscriberPackageName || '-'}</td>
+          <td>${esc(pkg.SubscriberPackageName || '-')}</td>
           <td>${versionDisplay}</td>
-          <td>${pkg.SubscriberPackageVersionId || '-'}</td>
+          <td class="mono">${esc(pkg.SubscriberPackageVersionId || '-')}</td>
           <td><div class="btn-group">
             ${upgradeButton}
-            <button class="btn btn-danger btn-sm uninstall-package" data-packageid="${pkg.SubscriberPackageVersionId}">Uninstall</button>
+            <button class="btn btn-danger btn-sm uninstall-package" data-packageid="${esc(pkg.SubscriberPackageVersionId)}">Uninstall</button>
           </div></td>
         </tr>`;
         }).join('')
-      : '<tr><td colspan="4" class="empty-state">No packages installed in target org</td></tr>';
+      : `<tr><td colspan="4" class="empty-state">${data.targetOrg ? 'No packages installed in target org' : 'No target org selected. Choose one on the Settings tab.'}</td></tr>`;
 
     const versionOptions = data.versions
       .filter(v => v.IsReleased)
-      .map(v => `<option value="${v.SubscriberPackageVersionId}">${v.Name || v.SubscriberPackageVersionId} (${v.MajorVersion}.${v.MinorVersion}.${v.PatchVersion})</option>`)
+      .map(v => `<option value="${esc(v.SubscriberPackageVersionId)}">${esc(v.Name || v.SubscriberPackageVersionId)} (${v.MajorVersion}.${v.MinorVersion}.${v.PatchVersion})</option>`)
       .join('');
 
     return `
@@ -1544,7 +1739,7 @@ export class DashboardWebview {
               <div class="form-group"><label>Package Version ID</label>
                 <input type="text" id="instVersionId" placeholder="04t..." required>
                 <span class="hint">Or select from released versions:</span>
-                <select id="instVersionSelect" style="margin-top:4px" onchange="document.getElementById('instVersionId').value=this.value">
+                <select id="instVersionSelect" style="margin-top:4px">
                   <option value="">-- Select a version --</option>
                   ${versionOptions}
                 </select>
@@ -1568,14 +1763,14 @@ export class DashboardWebview {
           <div class="setting-row">
             <div class="setting-info"><h3>Default Dev Hub</h3><p>The Dev Hub used for package operations</p></div>
             <div style="display:flex;align-items:center;gap:10px">
-              <span class="setting-value">${data.devHub || 'Not configured'}</span>
+              <span class="setting-value">${esc(data.devHub || 'Not configured')}</span>
               <button id="switchDevHub" class="btn btn-secondary btn-sm">Change</button>
             </div>
           </div>
           <div class="setting-row">
             <div class="setting-info"><h3>Default Target Org</h3><p>The org used for installations and testing</p></div>
             <div style="display:flex;align-items:center;gap:10px">
-              <span class="setting-value">${data.targetOrg || 'Not set'}</span>
+              <span class="setting-value">${esc(data.targetOrg || 'Not set')}</span>
               <button id="switchTargetOrg" class="btn btn-secondary btn-sm">Change</button>
             </div>
           </div>
@@ -1585,7 +1780,7 @@ export class DashboardWebview {
         <div class="section-header"><h2>Extension Settings</h2></div>
         <div class="section-content">
           <div class="setting-row">
-            <div class="setting-info"><h3>Auto Refresh</h3><p>Automatically refresh tree views after command execution</p></div>
+            <div class="setting-info"><h3>Auto Refresh</h3><p>Refresh the dashboard and sidebar automatically after changes</p></div>
             <span class="setting-value">${config.autoRefresh ? 'Enabled' : 'Disabled'}</span>
           </div>
           <div class="setting-row">
@@ -1597,12 +1792,8 @@ export class DashboardWebview {
             <span class="setting-value">${config.defaultWaitTime} minutes</span>
           </div>
           <div class="setting-row">
-            <div class="setting-info"><h3>Verbose Output</h3><p>Show verbose command output</p></div>
+            <div class="setting-info"><h3>Verbose Output</h3><p>Log full CLI responses to the Output panel</p></div>
             <span class="setting-value">${config.verboseOutput ? 'Enabled' : 'Disabled'}</span>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info"><h3>Save Command History</h3><p>Save command history for later reference</p></div>
-            <span class="setting-value">${config.saveCommandHistory ? 'Enabled' : 'Disabled'}</span>
           </div>
         </div>
       </div>
@@ -1613,4 +1804,24 @@ export class DashboardWebview {
         </div>
       </div>`;
   }
+}
+
+/** Newest version first when used as compare(b, a). */
+function compareVersionNumbers(a: PackageVersion, b: PackageVersion): number {
+  return (a.MajorVersion - b.MajorVersion) ||
+    (a.MinorVersion - b.MinorVersion) ||
+    (a.PatchVersion - b.PatchVersion) ||
+    (a.BuildNumber - b.BuildNumber);
+}
+
+/** CodeCoverage comes back as a number, a "75%" string or an object depending on the CLI command. */
+function formatCoverage(coverage: unknown): string {
+  if (typeof coverage === 'number') {
+    return `${coverage}%`;
+  }
+  if (typeof coverage === 'string' && coverage) {
+    return coverage.endsWith('%') ? coverage : `${coverage}%`;
+  }
+  const percentage = (coverage as { apexCodeCoveragePercentage?: number } | null)?.apexCodeCoveragePercentage;
+  return typeof percentage === 'number' ? `${percentage}%` : '-';
 }

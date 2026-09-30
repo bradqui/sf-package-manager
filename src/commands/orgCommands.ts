@@ -3,59 +3,24 @@ import { CliExecutor } from '../services/cliExecutor';
 import { ConfigService } from '../services/configService';
 import { Logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/errors';
+import { escapeHtml } from '../utils/html';
+import { OrgService, OrgSummary } from '../services/orgService';
 
-interface OrgInfo {
-  alias?: string;
-  username: string;
-  orgId: string;
-  instanceUrl: string;
-  isDevHub?: boolean;
-}
+type OrgInfo = OrgSummary;
 
 export class OrgCommands {
+  private orgService: OrgService;
+
   constructor(
     private cliExecutor: CliExecutor,
     private configService: ConfigService
-  ) {}
+  ) {
+    this.orgService = new OrgService(cliExecutor);
+  }
 
   async listOrgs(): Promise<OrgInfo[]> {
     try {
-      const result = await this.cliExecutor.execute('sf', ['org', 'list', '--json']);
-
-      if (!result.success || !result.data?.result) {
-        Logger.error('Failed to list orgs');
-        return [];
-      }
-
-      const allOrgs: OrgInfo[] = [];
-
-      // Add scratch orgs
-      if (result.data.result.scratchOrgs) {
-        result.data.result.scratchOrgs.forEach((org: any) => {
-          allOrgs.push({
-            alias: org.alias,
-            username: org.username,
-            orgId: org.orgId,
-            instanceUrl: org.instanceUrl,
-            isDevHub: false
-          });
-        });
-      }
-
-      // Add non-scratch orgs
-      if (result.data.result.nonScratchOrgs) {
-        result.data.result.nonScratchOrgs.forEach((org: any) => {
-          allOrgs.push({
-            alias: org.alias,
-            username: org.username,
-            orgId: org.orgId,
-            instanceUrl: org.instanceUrl,
-            isDevHub: org.isDevHub || false
-          });
-        });
-      }
-
-      return allOrgs;
+      return await this.orgService.listOrgs();
     } catch (error) {
       Logger.error(`Error listing orgs: ${error}`);
       return [];
@@ -64,51 +29,23 @@ export class OrgCommands {
 
   async switchDevHub(): Promise<void> {
     try {
-      const orgs = await this.listOrgs();
-
-      if (orgs.length === 0) {
-        vscode.window.showWarningMessage(
-          'No orgs found. Please authenticate with Salesforce using "sf org login"'
-        );
-        return;
-      }
-
-      // Filter for Dev Hubs
-      const devHubs = orgs.filter(org => org.isDevHub);
-
-      if (devHubs.length === 0) {
-        vscode.window.showWarningMessage(
-          'No Dev Hubs found. Please authenticate with a Dev Hub org.'
-        );
-        return;
-      }
-
-      const items = devHubs.map(org => ({
-        label: org.alias || org.username,
-        description: org.username,
-        detail: `${org.instanceUrl} (${org.orgId})`,
-        org: org
-      }));
-
-      const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Select a Dev Hub',
-        matchOnDescription: true,
-        matchOnDetail: true
+      const selected = await this.orgService.pickOrg({
+        title: 'Select Dev Hub',
+        placeHolder: 'Dev Hub used to create and manage packages',
+        emptyMessage: 'No Dev Hubs found. Authenticate one with "sf org login web --set-default-dev-hub".',
+        filter: org => org.isDevHub,
+        current: this.configService.getDefaultDevHub()
       });
 
       if (!selected) {
         return;
       }
 
-      await this.configService.setDefaultDevHub(selected.org.alias || selected.org.username);
+      const value = selected.alias || selected.username;
+      await this.configService.setDefaultDevHub(value);
+      vscode.window.showInformationMessage(`Dev Hub set to: ${value}`);
+      Logger.info(`Dev Hub switched to: ${selected.username}`);
 
-      vscode.window.showInformationMessage(
-        `Dev Hub set to: ${selected.label}`
-      );
-
-      Logger.info(`Dev Hub switched to: ${selected.org.username}`);
-
-      // Trigger refresh
       vscode.commands.executeCommand('sfPackageManager.refresh');
     } catch (error) {
       ErrorHandler.handle(error, 'Error switching Dev Hub');
@@ -117,41 +54,22 @@ export class OrgCommands {
 
   async switchTargetOrg(): Promise<void> {
     try {
-      const orgs = await this.listOrgs();
-
-      if (orgs.length === 0) {
-        vscode.window.showWarningMessage(
-          'No orgs found. Please authenticate with Salesforce using "sf org login"'
-        );
-        return;
-      }
-
-      const items = orgs.map(org => ({
-        label: org.alias || org.username,
-        description: org.username,
-        detail: `${org.instanceUrl} ${org.isDevHub ? '[Dev Hub]' : ''}`,
-        org: org
-      }));
-
-      const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Select a target org',
-        matchOnDescription: true,
-        matchOnDetail: true
+      const selected = await this.orgService.pickOrg({
+        title: 'Select Target Org',
+        placeHolder: 'Org used for package installs and testing',
+        emptyMessage: 'No orgs found. Authenticate one with "sf org login web".',
+        current: this.configService.getDefaultTargetOrg()
       });
 
       if (!selected) {
         return;
       }
 
-      await this.configService.setDefaultTargetOrg(selected.org.alias || selected.org.username);
+      const value = selected.alias || selected.username;
+      await this.configService.setDefaultTargetOrg(value);
+      vscode.window.showInformationMessage(`Target org set to: ${value}`);
+      Logger.info(`Target org switched to: ${selected.username}`);
 
-      vscode.window.showInformationMessage(
-        `Target org set to: ${selected.label}`
-      );
-
-      Logger.info(`Target org switched to: ${selected.org.username}`);
-
-      // Trigger refresh
       vscode.commands.executeCommand('sfPackageManager.refresh');
     } catch (error) {
       ErrorHandler.handle(error, 'Error switching target org');
@@ -211,19 +129,19 @@ export class OrgCommands {
         <div class="org-details">
           <div class="detail-row">
             <span class="label">Alias:</span>
-            <span class="value">${devHubInfo.alias || 'None'}</span>
+            <span class="value">${escapeHtml(devHubInfo.alias || 'None')}</span>
           </div>
           <div class="detail-row">
             <span class="label">Username:</span>
-            <span class="value">${devHubInfo.username}</span>
+            <span class="value">${escapeHtml(devHubInfo.username)}</span>
           </div>
           <div class="detail-row">
             <span class="label">Org ID:</span>
-            <span class="value">${devHubInfo.orgId}</span>
+            <span class="value">${escapeHtml(devHubInfo.orgId)}</span>
           </div>
           <div class="detail-row">
             <span class="label">Instance:</span>
-            <span class="value">${devHubInfo.instanceUrl}</span>
+            <span class="value">${escapeHtml(devHubInfo.instanceUrl)}</span>
           </div>
         </div>
         <button onclick="switchDevHub()">Switch Dev Hub</button>
@@ -232,7 +150,7 @@ export class OrgCommands {
       <div class="org-card warning">
         <h3>⚠️ Dev Hub</h3>
         <p>No Dev Hub configured or authenticated</p>
-        <p class="hint">Configured value: ${devHubConfig || 'Not set'}</p>
+        <p class="hint">Configured value: ${escapeHtml(devHubConfig || 'Not set')}</p>
         <button onclick="switchDevHub()">Select Dev Hub</button>
       </div>
     `;
@@ -243,19 +161,19 @@ export class OrgCommands {
         <div class="org-details">
           <div class="detail-row">
             <span class="label">Alias:</span>
-            <span class="value">${targetOrgInfo.alias || 'None'}</span>
+            <span class="value">${escapeHtml(targetOrgInfo.alias || 'None')}</span>
           </div>
           <div class="detail-row">
             <span class="label">Username:</span>
-            <span class="value">${targetOrgInfo.username}</span>
+            <span class="value">${escapeHtml(targetOrgInfo.username)}</span>
           </div>
           <div class="detail-row">
             <span class="label">Org ID:</span>
-            <span class="value">${targetOrgInfo.orgId}</span>
+            <span class="value">${escapeHtml(targetOrgInfo.orgId)}</span>
           </div>
           <div class="detail-row">
             <span class="label">Instance:</span>
-            <span class="value">${targetOrgInfo.instanceUrl}</span>
+            <span class="value">${escapeHtml(targetOrgInfo.instanceUrl)}</span>
           </div>
         </div>
         <button onclick="switchTargetOrg()">Switch Target Org</button>
@@ -264,7 +182,7 @@ export class OrgCommands {
       <div class="org-card warning">
         <h3>⚠️ Target Org</h3>
         <p>No target org configured or authenticated</p>
-        <p class="hint">Configured value: ${targetOrgConfig || 'Not set'}</p>
+        <p class="hint">Configured value: ${escapeHtml(targetOrgConfig || 'Not set')}</p>
         <button onclick="switchTargetOrg()">Select Target Org</button>
       </div>
     `;

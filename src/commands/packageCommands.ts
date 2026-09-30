@@ -27,7 +27,7 @@ export class PackageCommands {
 
       const args = this.commandBuilder.buildPackageList(devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
-      Logger.info(`Listing packages: ${preview}`);
+      Logger.debug(`Listing packages: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -133,7 +133,7 @@ export class PackageCommands {
         }
       }
 
-      Logger.info(`Creating package: ${preview}`);
+      Logger.debug(`Creating package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -209,7 +209,7 @@ export class PackageCommands {
       const args = this.commandBuilder.buildPackageUpdate(request, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
 
-      Logger.info(`Updating package: ${preview}`);
+      Logger.debug(`Updating package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',
@@ -276,7 +276,7 @@ export class PackageCommands {
       const args = this.commandBuilder.buildPackageDelete(packageId, devHub);
       const preview = this.commandBuilder.previewCommand('sf', args);
 
-      Logger.info(`Deleting package: ${preview}`);
+      Logger.debug(`Deleting package: ${preview}`);
 
       const result = await this.cliExecutor.executeWithProgress(
         'sf',

@@ -1,13 +1,25 @@
 import * as vscode from 'vscode';
 import { Logger } from './logger';
+import { CANCELLED_ERROR } from '../models/cliResponse';
 
 export class ErrorHandler {
+  /**
+   * Log an error and show it with a "Show Output" button.
+   * Cancellations are ignored — the user already knows they cancelled.
+   */
   static handle(error: any, context?: string): void {
     const message = this.extractMessage(error);
+    if (message === CANCELLED_ERROR) {
+      return;
+    }
     const fullMessage = context ? `${context}: ${message}` : message;
 
     Logger.error(fullMessage);
-    vscode.window.showErrorMessage(fullMessage);
+    vscode.window.showErrorMessage(fullMessage, 'Show Output').then(choice => {
+      if (choice === 'Show Output') {
+        Logger.show();
+      }
+    });
   }
 
   static async handleWithRetry(
