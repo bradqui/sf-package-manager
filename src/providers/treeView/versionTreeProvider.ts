@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { PackageVersion } from '../../models/packageVersion';
 import { ProjectService } from '../../services/projectService';
 import { ConfigService } from '../../services/configService';
-import { CliExecutor } from '../../services/cliExecutor';
-import { CommandBuilder } from '../../services/commandBuilder';
+import { PackageDataStore } from '../../services/packageDataStore';
+import { sortVersionsDesc } from '../../shared/versions';
 import { PackageTreeItem, TreeItemType } from './packageTreeItems';
 import { Logger } from '../../utils/logger';
 
@@ -11,20 +11,13 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
   private _onDidChangeTreeData = new vscode.EventEmitter<PackageTreeItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private cliExecutor: CliExecutor;
-  private commandBuilder: CommandBuilder;
-  private versions: PackageVersion[] = [];
-
   constructor(
     private projectService: ProjectService,
-    private configService: ConfigService
-  ) {
-    this.cliExecutor = new CliExecutor();
-    this.commandBuilder = new CommandBuilder();
-  }
+    private configService: ConfigService,
+    private store: PackageDataStore
+  ) {}
 
   refresh(): void {
-    this.versions = []; // Clear cache
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -106,14 +99,12 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
 
     const items: PackageTreeItem[] = [];
 
-    // Get package directories and their versions (loaded in parallel)
+    // Get package directories and their versions (one shared, cached version list)
     if (project.packageDirectories && project.packageDirectories.length > 0) {
       const aliases = project.packageAliases || {};
-      const versionsByDir = await vscode.window.withProgress(
-        { location: { viewId: 'sfVersionExplorer' } },
-        () => Promise.all(project.packageDirectories.map(dir =>
-          aliases[dir.package] ? this.loadVersionsForPackage(aliases[dir.package]) : Promise.resolve([])
-        ))
+      const allVersions = await this.loadVersions();
+      const versionsByDir = project.packageDirectories.map(dir =>
+        sortVersionsDesc(allVersions.filter(v => aliases[dir.package] && v.Package2Id === aliases[dir.package]))
       );
 
       project.packageDirectories.forEach((dir, dirIndex) => {
@@ -175,22 +166,17 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      // Return cached versions if available
-      if (this.versions.length > 0) {
-        return this.formatVersionItems(this.versions);
-      }
-
-      const args = this.commandBuilder.buildPackageVersionList(devHub);
-      const result = await vscode.window.withProgress(
-        { location: { viewId: 'sfVersionExplorer' } },
-        () => this.cliExecutor.execute('sf', args, { label: 'Loading package versions' })
-      );
-
-      if (!result.success || !result.data?.result) {
-        Logger.error(`Failed to load versions: ${result.error}`);
+      let versions: PackageVersion[];
+      try {
+        versions = sortVersionsDesc(await vscode.window.withProgress(
+          { location: { viewId: 'sfVersionExplorer' } },
+          () => this.store.getVersions()
+        ));
+      } catch (error: any) {
+        Logger.error(`Failed to load versions: ${error.message}`);
         return [
           new PackageTreeItem(
-            'Failed to load versions',
+            'Failed to load versions (click to retry)',
             TreeItemType.Error,
             vscode.TreeItemCollapsibleState.None,
             {
@@ -201,9 +187,7 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      this.versions = result.data.result;
-
-      if (this.versions.length === 0) {
+      if (versions.length === 0) {
         return [
           new PackageTreeItem(
             'No versions found',
@@ -217,7 +201,7 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      return this.formatVersionItems(this.versions);
+      return this.formatVersionItems(versions);
     } catch (error) {
       Logger.error(`Error loading versions: ${error}`);
       return [
@@ -250,23 +234,18 @@ export class VersionTreeProvider implements vscode.TreeDataProvider<PackageTreeI
     });
   }
 
-  private async loadVersionsForPackage(packageId: string): Promise<PackageVersion[]> {
+  /** All versions for the Dev Hub (empty if none is selected or loading fails). */
+  private async loadVersions(): Promise<PackageVersion[]> {
+    if (!this.configService.getDefaultDevHub()) {
+      return [];
+    }
     try {
-      const devHub = this.configService.getDefaultDevHub();
-      if (!devHub) {
-        return [];
-      }
-
-      const args = this.commandBuilder.buildPackageVersionList(devHub, packageId);
-      const result = await this.cliExecutor.execute('sf', args);
-
-      if (!result.success || !result.data?.result) {
-        return [];
-      }
-
-      return result.data.result;
-    } catch (error) {
-      Logger.error(`Error loading versions for package ${packageId}: ${error}`);
+      return await vscode.window.withProgress(
+        { location: { viewId: 'sfVersionExplorer' } },
+        () => this.store.getVersions()
+      );
+    } catch (error: any) {
+      Logger.error(`Error loading versions: ${error.message}`);
       return [];
     }
   }

@@ -11,6 +11,8 @@ export interface PackageDirectory {
   path: string;
   default: boolean;
   package: string;
+  ancestorVersion?: string;
+  ancestorId?: string;
   versionName?: string;
   versionNumber?: string;
   versionDescription?: string;
@@ -18,6 +20,9 @@ export interface PackageDirectory {
 
 export interface Package {
   Id: string;
+  /** 033 ID, matches SubscriberPackageId on installed packages */
+  SubscriberPackageId?: string;
+  Alias?: string;
   Name: string;
   Description?: string;
   NamespacePrefix?: string;

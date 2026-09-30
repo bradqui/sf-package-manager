@@ -1,3 +1,7 @@
+/**
+ * A package version as returned by `sf package version list --json` (and,
+ * with a subset of fields, `package version report`).
+ */
 export interface PackageVersion {
   Id: string;
   Package2Id: string;
@@ -12,12 +16,26 @@ export interface PackageVersion {
   BuildNumber: number;
   IsReleased: boolean;
   IsDeprecated?: boolean;
-  ReleaseVersion?: number;
-  BuildDurationInSeconds?: number;
-  HasPassedCodeCoverageCheck?: boolean;
-  CodeCoverage?: number;
+  /** Package name and namespace (version list only) */
+  Package2Name?: string;
+  NamespacePrefix?: string;
+  /** "major.minor.patch.build" (version list only) */
+  Version?: string;
+  IsPasswordProtected?: boolean;
+  ReleaseVersion?: number | string;
+  BuildDurationInSeconds?: number | string;
+  /** true/false, or 'N/A' for org-dependent or validation-skipped versions */
+  HasPassedCodeCoverageCheck?: boolean | string;
+  /** A number (report), '75%' (list --verbose) or a hint string (list without --verbose) */
+  CodeCoverage?: number | string | { apexCodeCoveragePercentage?: number };
   ValidationSkipped?: boolean;
+  ValidatedAsync?: boolean;
+  /** 04t ID of the ancestor, or 'N/A' for unlocked packages */
   AncestorId?: string;
+  AncestorVersion?: string;
+  Alias?: string;
+  InstallUrl?: string;
+  /** Version list returns 'YYYY-MM-DD HH:mm' in UTC */
   CreatedDate: string;
   LastModifiedDate: string;
 }

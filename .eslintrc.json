@@ -3,9 +3,14 @@
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
     "ecmaVersion": 2020,
-    "sourceType": "module"
+    "sourceType": "module",
+    "ecmaFeatures": {
+      "jsx": true
+    }
   },
-  "plugins": ["@typescript-eslint"],
+  "plugins": [
+    "@typescript-eslint"
+  ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended"
@@ -18,5 +23,28 @@
     "no-throw-literal": "warn",
     "semi": "off"
   },
-  "ignorePatterns": ["out", "dist", "**/*.d.ts"]
+  "ignorePatterns": [
+    "out",
+    "dist",
+    "**/*.d.ts"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/webview/**/*.tsx"
+      ],
+      "rules": {
+        "@typescript-eslint/naming-convention": [
+          "warn",
+          {
+            "selector": "function",
+            "format": [
+              "camelCase",
+              "PascalCase"
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

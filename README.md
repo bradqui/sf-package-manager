@@ -4,7 +4,11 @@ Comprehensive management of Salesforce Second Generation Packages (2GP) with vis
 
 ## Features
 
-- **Dashboard** for scratch orgs, packages, versions and installations (click the status bar item or run `SF Package: Open Management Dashboard`)
+- **Dashboard** (click the status bar item or run `SF Package: Open Management Dashboard`):
+  - Overview of your project's packages, target org upgrades and expiring scratch orgs
+  - Versions grouped by package and major.minor, with search, filters and bulk cleanup of old betas
+  - Package details, installs and upgrades, scratch orgs and settings in one place
+  - Dev Hub and target org switchers; falls back to the Salesforce CLI's `target-dev-hub` / `target-org`
 - **Sidebar tree views** of packages, versions and installations
 - **Form-based UI** for package, version, install and scratch org commands
 - **Command preview** before execution
@@ -109,8 +113,6 @@ Press F5 in VSCode to launch the Extension Development Host.
 
 The extension is being reworked with the dashboard as the primary interface:
 
-- Faster dashboard with shared caching and in-place updates
-- Grouped, filterable version lists with bulk cleanup of old betas
 - Non-blocking version creation with live status
 - Package ancestry management (including breaking ancestry)
 - Scratch org definition editor

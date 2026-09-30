@@ -2,8 +2,7 @@ import * as vscode from 'vscode';
 import { Package } from '../../models/package';
 import { ProjectService } from '../../services/projectService';
 import { ConfigService } from '../../services/configService';
-import { CliExecutor } from '../../services/cliExecutor';
-import { CommandBuilder } from '../../services/commandBuilder';
+import { PackageDataStore } from '../../services/packageDataStore';
 import { PackageTreeItem, TreeItemType } from './packageTreeItems';
 import { escapeHtml, scriptJson } from '../../utils/html';
 import { Logger } from '../../utils/logger';
@@ -12,20 +11,13 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
   private _onDidChangeTreeData = new vscode.EventEmitter<PackageTreeItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private cliExecutor: CliExecutor;
-  private commandBuilder: CommandBuilder;
-  private packages: Package[] = [];
-
   constructor(
     private projectService: ProjectService,
-    private configService: ConfigService
-  ) {
-    this.cliExecutor = new CliExecutor();
-    this.commandBuilder = new CommandBuilder();
-  }
+    private configService: ConfigService,
+    private store: PackageDataStore
+  ) {}
 
   refresh(): void {
-    this.packages = []; // Clear cache
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -169,34 +161,17 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      // Return cached packages if available
-      if (this.packages.length > 0) {
-        return this.packages.map(pkg =>
-          new PackageTreeItem(
-            pkg.Name,
-            TreeItemType.Package,
-            vscode.TreeItemCollapsibleState.None,
-            {
-              command: 'sfPackageManager.showPackageDetails',
-              title: 'Show Details',
-              arguments: [pkg]
-            },
-            pkg
-          )
+      let packages: Package[];
+      try {
+        packages = await vscode.window.withProgress(
+          { location: { viewId: 'sfPackageExplorer' } },
+          () => this.store.getPackages()
         );
-      }
-
-      const args = this.commandBuilder.buildPackageList(devHub);
-      const result = await vscode.window.withProgress(
-        { location: { viewId: 'sfPackageExplorer' } },
-        () => this.cliExecutor.execute('sf', args, { label: 'Loading packages' })
-      );
-
-      if (!result.success || !result.data?.result) {
-        Logger.error(`Failed to load packages: ${result.error}`);
+      } catch (error: any) {
+        Logger.error(`Failed to load packages: ${error.message}`);
         return [
           new PackageTreeItem(
-            'Failed to load packages',
+            'Failed to load packages (click to retry)',
             TreeItemType.Error,
             vscode.TreeItemCollapsibleState.None,
             {
@@ -207,9 +182,7 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      this.packages = result.data.result;
-
-      if (this.packages.length === 0) {
+      if (packages.length === 0) {
         return [
           new PackageTreeItem(
             'No packages found',
@@ -223,7 +196,7 @@ export class PackageTreeProvider implements vscode.TreeDataProvider<PackageTreeI
         ];
       }
 
-      return this.packages.map(pkg =>
+      return packages.map(pkg =>
         new PackageTreeItem(
           pkg.Name,
           TreeItemType.Package,

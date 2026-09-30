@@ -1,35 +1,22 @@
 import * as vscode from 'vscode';
 import { ConfigService } from '../../services/configService';
-import { CliExecutor } from '../../services/cliExecutor';
-import { CommandBuilder } from '../../services/commandBuilder';
+import { PackageDataStore } from '../../services/packageDataStore';
+import { InstalledPackage } from '../../shared/protocol';
 import { PackageTreeItem, TreeItemType } from './packageTreeItems';
 import { escapeHtml, scriptJson } from '../../utils/html';
 import { Logger } from '../../utils/logger';
 
-interface InstalledPackage {
-  SubscriberPackageId: string;
-  SubscriberPackageName: string;
-  SubscriberPackageNamespace: string;
-  SubscriberPackageVersionId: string;
-  SubscriberPackageVersionName: string;
-  SubscriberPackageVersionNumber: string;
-}
 
 export class InstallationTreeProvider implements vscode.TreeDataProvider<PackageTreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<PackageTreeItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private cliExecutor: CliExecutor;
-  private commandBuilder: CommandBuilder;
-  private installedPackages: InstalledPackage[] = [];
-
-  constructor(private configService: ConfigService) {
-    this.cliExecutor = new CliExecutor();
-    this.commandBuilder = new CommandBuilder();
-  }
+  constructor(
+    private configService: ConfigService,
+    private store: PackageDataStore
+  ) {}
 
   refresh(): void {
-    this.installedPackages = []; // Clear cache
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -114,22 +101,17 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
         ];
       }
 
-      // Return cached packages if available
-      if (this.installedPackages.length > 0) {
-        return this.formatInstalledPackageItems(this.installedPackages);
-      }
-
-      const args = this.commandBuilder.buildPackageInstalledList(targetOrg);
-      const result = await vscode.window.withProgress(
-        { location: { viewId: 'sfInstallationExplorer' } },
-        () => this.cliExecutor.execute('sf', args, { label: 'Loading installed packages' })
-      );
-
-      if (!result.success || !result.data?.result) {
-        Logger.error(`Failed to load installed packages: ${result.error}`);
+      let installedPackages: InstalledPackage[];
+      try {
+        installedPackages = await vscode.window.withProgress(
+          { location: { viewId: 'sfInstallationExplorer' } },
+          () => this.store.getInstalled()
+        );
+      } catch (error: any) {
+        Logger.error(`Failed to load installed packages: ${error.message}`);
         return [
           new PackageTreeItem(
-            'Failed to load installed packages',
+            'Failed to load installed packages (click to retry)',
             TreeItemType.Error,
             vscode.TreeItemCollapsibleState.None,
             {
@@ -140,9 +122,7 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
         ];
       }
 
-      this.installedPackages = result.data.result;
-
-      if (this.installedPackages.length === 0) {
+      if (installedPackages.length === 0) {
         return [
           new PackageTreeItem(
             'No packages installed',
@@ -156,7 +136,7 @@ export class InstallationTreeProvider implements vscode.TreeDataProvider<Package
         ];
       }
 
-      return this.formatInstalledPackageItems(this.installedPackages);
+      return this.formatInstalledPackageItems(installedPackages);
     } catch (error) {
       Logger.error(`Error loading installed packages: ${error}`);
       return [

@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { ConfigService } from './services/configService';
 import { ProjectService } from './services/projectService';
 import { CliExecutor } from './services/cliExecutor';
+import { CommandBuilder } from './services/commandBuilder';
+import { OrgService } from './services/orgService';
+import { PackageDataStore } from './services/packageDataStore';
 import { Logger } from './utils/logger';
 import { registerCommands } from './commands';
 import { PackageTreeProvider } from './providers/treeView/packageTreeProvider';
@@ -19,6 +22,10 @@ export async function activate(context: vscode.ExtensionContext) {
   const configService = new ConfigService();
   const projectService = new ProjectService();
   const cliExecutor = new CliExecutor();
+  const orgService = new OrgService(cliExecutor);
+  // Shared cache of packages, versions, installs and orgs for the dashboard and sidebar
+  const store = new PackageDataStore(cliExecutor, new CommandBuilder(), configService, orgService);
+  context.subscriptions.push(store);
 
   // Check for sfdx-project.json
   const hasSfdxProject = await projectService.hasSfdxProject();
@@ -50,9 +57,9 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   // Register tree view providers
-  const packageTreeProvider = new PackageTreeProvider(projectService, configService);
-  const versionTreeProvider = new VersionTreeProvider(projectService, configService);
-  const installationTreeProvider = new InstallationTreeProvider(configService);
+  const packageTreeProvider = new PackageTreeProvider(projectService, configService, store);
+  const versionTreeProvider = new VersionTreeProvider(projectService, configService, store);
+  const installationTreeProvider = new InstallationTreeProvider(configService, store);
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('sfPackageExplorer', packageTreeProvider),
@@ -67,24 +74,26 @@ export async function activate(context: vscode.ExtensionContext) {
   };
 
   // Register all commands
-  registerCommands(context, { configService, projectService });
+  registerCommands(context, { cliExecutor, configService, projectService, orgService, store });
 
+  // Refresh: drop cached data so the sidebar and dashboard both reload from Salesforce
   context.subscriptions.push(
     vscode.commands.registerCommand('sfPackageManager.refresh', () => {
       Logger.debug('Refresh command triggered');
-      refreshTrees();
+      store.invalidate();
     })
   );
 
-  // Refresh the sidebar after commands that change packages, versions, installs or orgs
+  // Reload the sidebar when data changes. Changes made by commands follow the
+  // auto refresh setting; explicit refreshes and org switches always reload.
   let refreshTimer: NodeJS.Timeout | undefined;
   context.subscriptions.push(
-    CliExecutor.onDidChangeData(() => {
-      if (!configService.getAutoRefresh()) {
+    store.onDidChange(change => {
+      if (change.reason === 'changed' && !configService.getAutoRefresh()) {
         return;
       }
       clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(refreshTrees, 500);
+      refreshTimer = setTimeout(refreshTrees, 400);
     }),
     { dispose: () => clearTimeout(refreshTimer) }
   );

@@ -355,27 +355,31 @@
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
+    "lint": "eslint src --ext ts,tsx",
     "test": "node ./out/test/runTest.js",
-    "install-local": "node scripts/install-local.js"
+    "install-local": "node scripts/install-local.js",
+    "typecheck": "tsc -p . --noEmit && tsc -p src/webview --noEmit"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
-    "@types/node": "20.x",
-    "@types/mocha": "^10.0.6",
     "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "@vscode/test-electron": "^2.3.8",
     "eslint": "^8.56.0",
     "glob": "^10.3.10",
     "mocha": "^10.2.0",
+    "preact-render-to-string": "^6.7.0",
+    "ts-loader": "^9.5.1",
     "typescript": "^5.3.3",
     "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4",
-    "ts-loader": "^9.5.1"
+    "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "execa": "^8.0.1"
+    "@vscode/codicons": "^0.0.36",
+    "execa": "^8.0.1",
+    "preact": "^10.29.8"
   }
 }

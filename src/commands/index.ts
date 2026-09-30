@@ -10,17 +10,24 @@ import { CommandBuilder } from '../services/commandBuilder';
 import { ConfigService } from '../services/configService';
 import { ProjectService } from '../services/projectService';
 import { CodeNavigationService } from '../services/codeNavigationService';
-import { DashboardWebview } from '../providers/webview/dashboardWebview';
+import { OrgService } from '../services/orgService';
+import { PackageDataStore } from '../services/packageDataStore';
+import { DashboardPanel } from '../providers/webview/dashboardPanel';
+import { DashboardActions } from '../providers/webview/dashboardActions';
+import { ViewId } from '../shared/protocol';
 import { Logger } from '../utils/logger';
 
 export function registerCommands(
   context: vscode.ExtensionContext,
   services: {
+    cliExecutor: CliExecutor;
     configService: ConfigService;
     projectService: ProjectService;
+    orgService: OrgService;
+    store: PackageDataStore;
   }
 ): void {
-  const cliExecutor = new CliExecutor();
+  const cliExecutor = services.cliExecutor;
   const commandBuilder = new CommandBuilder();
 
   const packageCommands = new PackageCommands(
@@ -60,11 +67,19 @@ export function registerCommands(
     services.configService
   );
 
-  const dashboardWebview = new DashboardWebview(
-    cliExecutor,
-    commandBuilder,
-    services.configService
-  );
+  const dashboard = DashboardPanel.create(context, {
+    store: services.store,
+    configService: services.configService,
+    projectService: services.projectService,
+    actions: new DashboardActions(
+      cliExecutor,
+      commandBuilder,
+      services.configService,
+      services.orgService,
+      services.store,
+      scratchOrgCommands
+    )
+  });
 
   // Package commands
   context.subscriptions.push(
@@ -254,9 +269,12 @@ export function registerCommands(
 
   // Dashboard command
   context.subscriptions.push(
-    vscode.commands.registerCommand('sfPackageManager.openDashboard', async () => {
+    vscode.commands.registerCommand('sfPackageManager.openDashboard', async (view?: ViewId, packageId?: string) => {
       Logger.debug('Open dashboard command triggered');
-      await dashboardWebview.show();
+      await dashboard.show(
+        typeof view === 'string' ? view : undefined,
+        typeof packageId === 'string' ? packageId : undefined
+      );
     })
   );
 
