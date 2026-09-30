@@ -1,0 +1,412 @@
+{
+  "name": "sf-package-manager",
+  "displayName": "Salesforce 2GP Package Manager",
+  "description": "Comprehensive management of Salesforce Second Generation Packages (2GP) with visual UI for all package commands",
+  "version": "0.1.10",
+  "publisher": "brad-quillen",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "salesforce",
+    "sfdx",
+    "sf",
+    "package",
+    "2gp",
+    "managed package"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/sfdx-project.json"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sf-package-manager",
+          "title": "SF Package Manager",
+          "icon": "media/icons/package.svg"
+        }
+      ]
+    },
+    "views": {
+      "sf-package-manager": [
+        {
+          "id": "sfPackageExplorer",
+          "name": "Package Explorer",
+          "icon": "media/icons/package.svg",
+          "contextualTitle": "Salesforce Packages"
+        },
+        {
+          "id": "sfVersionExplorer",
+          "name": "Version Explorer",
+          "icon": "media/icons/version.svg"
+        },
+        {
+          "id": "sfInstallationExplorer",
+          "name": "Installations",
+          "icon": "media/icons/released.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "sfPackageManager.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.createPackage",
+        "title": "Create Package",
+        "icon": "$(add)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.updatePackage",
+        "title": "Update Package",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.deletePackage",
+        "title": "Delete Package",
+        "icon": "$(trash)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.listPackages",
+        "title": "List All Packages",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.createVersion",
+        "title": "Create Package Version",
+        "icon": "$(add)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.createVersionReport",
+        "title": "Check Version Creation Status",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.promoteVersion",
+        "title": "Promote Version to Released",
+        "icon": "$(rocket)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.deleteVersion",
+        "title": "Delete Package Version",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.listVersions",
+        "title": "List Package Versions",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.versionReport",
+        "title": "Get Version Details",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.displayAncestry",
+        "title": "Show Version Ancestry",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.displayDependencies",
+        "title": "Show Dependencies",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.installPackage",
+        "title": "Install Package",
+        "icon": "$(cloud-download)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.installReport",
+        "title": "Check Installation Status",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.listInstalled",
+        "title": "List Installed Packages",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.uninstallPackage",
+        "title": "Uninstall Package",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.schedulePushUpgrade",
+        "title": "Schedule Push Upgrade",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.listPushUpgrades",
+        "title": "List Push Upgrades",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.pushUpgradeReport",
+        "title": "Check Push Upgrade Status",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.abortPushUpgrade",
+        "title": "Abort Push Upgrade",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.openSettings",
+        "title": "Open Settings",
+        "icon": "$(settings-gear)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.viewCommandHistory",
+        "title": "View Command History",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.showPackageDetails",
+        "title": "Show Package Details",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.executeVersionCreate",
+        "title": "Execute Version Create",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.navigateToLWC",
+        "title": "Navigate to LWC Component",
+        "icon": "$(symbol-method)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.navigateToApex",
+        "title": "Navigate to Apex Class",
+        "icon": "$(symbol-class)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.navigateToCode",
+        "title": "Navigate to Code File",
+        "icon": "$(go-to-file)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.showCodeBrowser",
+        "title": "Show Code Browser",
+        "icon": "$(list-tree)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.showPackageCode",
+        "title": "Show Package Code",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.switchDevHub",
+        "title": "Switch Dev Hub",
+        "icon": "$(organization)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.switchTargetOrg",
+        "title": "Switch Target Org",
+        "icon": "$(organization)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.showOrgInfo",
+        "title": "Show Org Information",
+        "icon": "$(info)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.compareVersions",
+        "title": "Compare Package Versions",
+        "icon": "$(git-compare)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.openDashboard",
+        "title": "Open Management Dashboard",
+        "icon": "$(dashboard)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.createScratchOrg",
+        "title": "Create Scratch Org",
+        "icon": "$(add)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.deleteScratchOrg",
+        "title": "Delete Scratch Org",
+        "icon": "$(trash)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.listOrgs",
+        "title": "List All Orgs",
+        "icon": "$(list-unordered)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.openScratchOrg",
+        "title": "Open Scratch Org in Browser",
+        "icon": "$(globe)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.generateScratchDef",
+        "title": "Generate Scratch Org Definition",
+        "icon": "$(file-add)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.setDefaultOrg",
+        "title": "Set Default Target Org",
+        "icon": "$(star)",
+        "category": "SF Package"
+      },
+      {
+        "command": "sfPackageManager.createAndInstallPackage",
+        "title": "Create Scratch Org & Install Package",
+        "icon": "$(package)",
+        "category": "SF Package"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sfPackageManager.refresh",
+          "when": "view == sfPackageExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "sfPackageManager.createPackage",
+          "when": "view == sfPackageExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sfPackageManager.updatePackage",
+          "when": "view == sfPackageExplorer && viewItem == package",
+          "group": "inline"
+        },
+        {
+          "command": "sfPackageManager.deletePackage",
+          "when": "view == sfPackageExplorer && viewItem == package",
+          "group": "inline"
+        },
+        {
+          "command": "sfPackageManager.createVersion",
+          "when": "view == sfPackageExplorer && viewItem == package",
+          "group": "1_actions"
+        },
+        {
+          "command": "sfPackageManager.promoteVersion",
+          "when": "view == sfVersionExplorer && viewItem == betaVersion",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sfPackageManager.refresh",
+          "when": "workspaceContains:**/sfdx-project.json"
+        },
+        {
+          "command": "sfPackageManager.showPackageDetails",
+          "when": "false"
+        },
+        {
+          "command": "sfPackageManager.executeVersionCreate",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SF Package Manager",
+      "properties": {
+        "sfPackageManager.defaultDevHub": {
+          "type": "string",
+          "default": "",
+          "description": "Default Dev Hub username or alias"
+        },
+        "sfPackageManager.defaultTargetOrg": {
+          "type": "string",
+          "default": "",
+          "description": "Default target org username or alias"
+        },
+        "sfPackageManager.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh tree views after command execution"
+        },
+        "sfPackageManager.showCommandPreview": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CLI command preview before execution"
+        },
+        "sfPackageManager.defaultWaitTime": {
+          "type": "number",
+          "default": 10,
+          "description": "Default wait time in minutes for package version creation"
+        },
+        "sfPackageManager.verboseOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show verbose command output"
+        },
+        "sfPackageManager.saveCommandHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Save command history for later reference"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "build": "webpack --mode production --devtool hidden-source-map",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "20.x",
+    "@types/mocha": "^10.0.6",
+    "@types/glob": "^8.1.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "ts-loader": "^9.5.1"
+  },
+  "dependencies": {
+    "execa": "^8.0.1"
+  }
+}

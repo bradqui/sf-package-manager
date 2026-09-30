@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+*.vsix
+.vscode-test/
+.vscode-test-web/
+.sfdx/
+.claude/settings.local.json
